@@ -16,7 +16,7 @@ permissions:
 jobs:
   build:
     name: Build Windows canary
-    if: github.repository == 'block/buzz'
+    if: github.repository == 'block/buzz' || github.repository == 'jhedlund/buzz'
     runs-on: windows-latest
     timeout-minutes: 60
     permissions:
@@ -24,12 +24,16 @@ jobs:
     env:
       TARGET: x86_64-pc-windows-msvc
     steps:
+      # Upstream canaries stay main-only: the cache this job writes is trusted by
+      # tag builds, so an arbitrary ref must never populate it. Forks write only
+      # their own cache, so they may build any branch.
       - name: Require main
         shell: bash
         env:
           SOURCE_REF: ${{ github.ref }}
+          SOURCE_REPO: ${{ github.repository }}
         run: |
-          if [[ "$SOURCE_REF" != "refs/heads/main" ]]; then
+          if [[ "$SOURCE_REPO" == "block/buzz" && "$SOURCE_REF" != "refs/heads/main" ]]; then
             echo "::error::Canary builds must run from main; got $SOURCE_REF"
             exit 1
           fi
