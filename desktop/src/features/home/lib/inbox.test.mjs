@@ -594,3 +594,135 @@ test("nested-anchor: old selected event stays resolvable by conversationId after
   // The new representative is the latest reply.
   assert.equal(inboxItem.id, LATEST_EVENT_ID);
 });
+
+// ── Row subject (headline) derivation ────────────────────────────────────────
+//
+// A row's subject names the conversation, so it comes from the thread ROOT,
+// never from the reply that happens to be the row's representative. Rows whose
+// root is not in the feed get no subject at all: the only thing left to derive
+// from is the kind, and that is already what the type label says.
+
+const SUBJECT_ROOT_ID = "subject-root";
+
+function subjectRoot(overrides = {}) {
+  return item({
+    id: SUBJECT_ROOT_ID,
+    category: "activity",
+    createdAt: 1,
+    tags: [["h", CHANNEL_ID]],
+    ...overrides,
+  });
+}
+
+function subjectReply(overrides = {}) {
+  return item({
+    id: "subject-reply",
+    category: "mention",
+    content: "Agreed, but the label has to survive an unknown kind.",
+    createdAt: 2,
+    tags: [
+      ["h", CHANNEL_ID],
+      ["e", SUBJECT_ROOT_ID, "", "root"],
+      ["e", SUBJECT_ROOT_ID, "", "reply"],
+    ],
+    ...overrides,
+  });
+}
+
+test("row subject uses the thread root's NIP-14 subject tag", () => {
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({
+      activity: [
+        subjectRoot({
+          content: "Opening line nobody should see as the headline.",
+          tags: [
+            ["h", CHANNEL_ID],
+            ["subject", "Threads have no editable, shared subject"],
+          ],
+        }),
+      ],
+      mentions: [subjectReply()],
+    }),
+  });
+
+  assert.equal(inboxItem.id, "subject-reply");
+  assert.equal(inboxItem.subject, "Threads have no editable, shared subject");
+});
+
+test("row subject falls back to the root's first line, not the reply's", () => {
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({
+      activity: [
+        subjectRoot({
+          content: "Can you see if other issues look at this?\n\nContext: …",
+        }),
+      ],
+      mentions: [subjectReply()],
+    }),
+  });
+
+  assert.equal(inboxItem.id, "subject-reply");
+  assert.equal(inboxItem.subject, "Can you see if other issues look at this?");
+});
+
+test("row subject is null when the thread root is not in the feed", () => {
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({ mentions: [subjectReply()] }),
+  });
+
+  assert.equal(inboxItem.subject, null);
+  // Regression guard: the old derivation returned the kind label here, which
+  // duplicates the type label the row already renders.
+  assert.equal(getInboxTypeLabel(inboxItem).text, "Mentioned in");
+});
+
+test("row subject is null when the root has no subject tag and no content", () => {
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({
+      activity: [subjectRoot({ content: "   \n  " })],
+      mentions: [subjectReply()],
+    }),
+  });
+
+  assert.equal(inboxItem.subject, null);
+});
+
+test("a top-level row with no thread takes its own first line as the subject", () => {
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({
+      mentions: [
+        item({
+          id: "standalone",
+          content: "I want this feature, too.\nIt can be really low-tech.",
+          tags: [["h", CHANNEL_ID]],
+        }),
+      ],
+    }),
+  });
+
+  assert.equal(inboxItem.subject, "I want this feature, too.");
+});
+
+test("DM rows have no subject — the type label already names the sender", () => {
+  const [inboxItem] = buildInboxItems({
+    channels,
+    feed: feedWith({
+      activity: [
+        item({
+          id: "dm-event",
+          channelId: DM_CHANNEL_ID,
+          channelType: "dm",
+          content: "ping",
+          tags: [["h", DM_CHANNEL_ID]],
+        }),
+      ],
+    }),
+  });
+
+  assert.equal(inboxItem.subject, null);
+});

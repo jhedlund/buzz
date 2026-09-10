@@ -83,10 +83,13 @@ function InboxLabel({
   isDone,
   isActionRequired,
   label,
+  sender,
 }: {
   isDone: boolean;
   isActionRequired: boolean;
   label: InboxTypeLabel;
+  /** Sender, folded into this line when the headline takes the primary line. */
+  sender?: React.ReactNode;
 }) {
   return (
     <div
@@ -101,6 +104,20 @@ function InboxLabel({
       )}
       data-inbox-type-label=""
     >
+      {sender ? (
+        <>
+          <span
+            className="flex min-w-0 shrink items-center font-semibold text-muted-foreground"
+            data-inbox-profile-trigger="true"
+            data-inbox-sender-label=""
+          >
+            {sender}
+          </span>
+          <span aria-hidden="true" className="shrink-0 opacity-50">
+            ·
+          </span>
+        </>
+      ) : null}
       <span className="shrink-0">{label.text}</span>
       {label.channelLabel ? (
         <span
@@ -324,10 +341,23 @@ export function InboxListPane({
         ? "Reopening…"
         : "Open in channel";
     const typeLabel = getInboxTypeLabel(item);
+    const headline = item.subject?.trim() || null;
     const videoReviewCommentRootId = getInboxVideoReviewCommentRootId(item);
     const isSenderAgent =
       agentPubkeys?.has(normalizePubkey(item.item.pubkey)) === true;
     const profileRole = isSenderAgent ? "bot" : undefined;
+    const senderName = (
+      <UserProfilePopover
+        botIdenticonValue={item.senderLabel}
+        pubkey={item.item.pubkey}
+        role={profileRole}
+        triggerElement="span"
+      >
+        <span className="block max-w-full truncate rounded text-inherit focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
+          {item.senderLabel}
+        </span>
+      </UserProfilePopover>
+    );
     const rowHighlightColor = isSelected
       ? "color-mix(in srgb, hsl(var(--background)) 70%, hsl(var(--muted)) 30%)"
       : "color-mix(in srgb, hsl(var(--background)) 75%, hsl(var(--muted)) 25%)";
@@ -405,21 +435,21 @@ export function InboxListPane({
 
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-start gap-2">
-                <span
-                  className="flex min-w-0 flex-1 items-start leading-4"
-                  data-inbox-profile-trigger="true"
-                >
-                  <UserProfilePopover
-                    botIdenticonValue={item.senderLabel}
-                    pubkey={item.item.pubkey}
-                    role={profileRole}
-                    triggerElement="span"
+                {headline ? (
+                  <span
+                    className="block min-w-0 flex-1 truncate text-sm font-semibold leading-4 text-foreground"
+                    data-testid={`home-inbox-headline-${item.id}`}
                   >
-                    <span className="block max-w-full truncate rounded text-sm font-semibold leading-4 text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring">
-                      {item.senderLabel}
-                    </span>
-                  </UserProfilePopover>
-                </span>
+                    {headline}
+                  </span>
+                ) : (
+                  <span
+                    className="flex min-w-0 flex-1 items-start text-sm font-semibold leading-4 text-foreground"
+                    data-inbox-profile-trigger="true"
+                  >
+                    {senderName}
+                  </span>
+                )}
                 <span
                   className={cn(
                     "flex shrink-0 items-center gap-1.5 text-xs leading-4 text-muted-foreground/70 transition-opacity group-hover/inbox-item:opacity-0 group-focus-within/inbox-item:opacity-0",
@@ -444,6 +474,7 @@ export function InboxListPane({
                 isActionRequired={item.isActionRequired}
                 isDone={isDone}
                 label={typeLabel}
+                sender={headline ? senderName : null}
               />
               {dueReminder ? (
                 <div

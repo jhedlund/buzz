@@ -56,7 +56,11 @@ export type InboxItem = {
   mentionPubkeysByName?: Record<string, string>;
   preview: string;
   senderLabel: string;
-  subject: string;
+  /**
+   * Thread subject for the row headline, or null when the conversation has
+   * nothing to name yet. See `feedSubject`.
+   */
+  subject: string | null;
   timestampLabel: string;
   unreadCount: number;
 };
@@ -134,15 +138,28 @@ function projectTypeLabel(item: FeedItem) {
   return "Project update";
 }
 
-function feedHeadline(item: FeedItem, groupItems: readonly FeedItem[] = []) {
-  if (isProjectInboxItem(item)) {
-    const root = projectRootItem(item, groupItems);
-    return (
-      (tagValue(root, "subject") ?? root.content.trim().split("\n")[0]) ||
-      projectTypeLabel(root)
-    );
+function firstContentLine(item: FeedItem) {
+  return item.content.trim().split("\n")[0]?.trim() || null;
+}
+
+/**
+ * Conversation subject for an Inbox row: the thread root's NIP-14 `subject`
+ * tag, then the root's first content line.
+ *
+ * `rootItem` is null whenever the row's root is not itself in the feed group —
+ * a reply-only mention, a DM, a top-level event with no thread. Those rows get
+ * no subject rather than a derived one, because the only thing left to derive
+ * from is the kind, and that is already what the type label says.
+ */
+function feedSubject(rootItem: FeedItem | null): string | null {
+  if (!rootItem) {
+    return null;
   }
 
+  return tagValue(rootItem, "subject") ?? firstContentLine(rootItem);
+}
+
+function feedTypeLabel(item: FeedItem) {
   switch (item.kind) {
     case 40007:
       return "Reminder";
@@ -237,7 +254,7 @@ function isItemUnread(
 }
 
 function activityHeadline(item: FeedItem) {
-  return feedHeadline(item);
+  return feedTypeLabel(item);
 }
 
 function resolveItemChannel(
@@ -588,7 +605,11 @@ export function buildInboxItems({
         profiles,
         preferResolvedSelfLabel: true,
       });
-      const subject = feedHeadline(item, group.items);
+      const subject = feedSubject(
+        isProjectInboxItem(item)
+          ? projectRootItem(item, group.items)
+          : group.rootItem,
+      );
       const preview = feedPreview(item);
       const { mentionNames, mentionPubkeysByName } = resolveMentionProps(
         item.tags,
