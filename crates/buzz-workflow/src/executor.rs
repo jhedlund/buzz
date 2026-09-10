@@ -420,10 +420,12 @@ pub fn resolve_step_templates(
             text,
             channel,
             reply_in_thread,
+            reply_to,
         } => Ok(SendMessage {
             text: t(text)?,
             channel: t_opt(channel)?,
             reply_in_thread: *reply_in_thread,
+            reply_to: t_opt(reply_to)?,
         }),
         SendDm { to, text } => Ok(SendDm {
             to: t(to)?,
@@ -527,6 +529,39 @@ fn resolve_send_message_channel(
     Ok(trigger_channel.trim().to_string())
 }
 
+/// Validate a resolved `reply_to` before it is used as a parent event id.
+///
+/// Checked here rather than left to the sink so the error names the step that
+/// is wrong. Three shapes are rejected, and the middle one is the reason this
+/// function exists: [`resolve_template`] leaves an **unknown variable as
+/// literal text**, so a mistyped step id arrives as the string
+/// `{{steps.titel.output.event_id}}` rather than as an empty value. Without
+/// this arm that mistake reaches the sink as a parent it cannot find, and
+/// fails one layer away from the definition that caused it.
+fn validate_reply_to<'a>(step_id: &str, value: &'a str) -> Result<&'a str, WorkflowError> {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() {
+        return Err(WorkflowError::InvalidDefinition(format!(
+            "step '{step_id}': reply_to resolved to an empty value; \
+             it must name the event to reply to"
+        )));
+    }
+    if trimmed.contains("{{") {
+        return Err(WorkflowError::InvalidDefinition(format!(
+            "step '{step_id}': reply_to still contains an unresolved template after \
+             resolution ({trimmed}) — check the referenced step id runs before this one"
+        )));
+    }
+    if trimmed.len() != 64 || !trimmed.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(WorkflowError::InvalidDefinition(format!(
+            "step '{step_id}': reply_to must be a 64-character hex event id, got: {trimmed}"
+        )));
+    }
+
+    Ok(trimmed)
+}
+
 /// Dispatch a resolved action and return its output.
 ///
 /// For MVP, most actions log their intent and return a success output.
@@ -570,6 +605,7 @@ pub async fn dispatch_action(
                     text,
                     channel,
                     reply_in_thread,
+                    reply_to: reply_to_def,
                 } => {
                     // Look up workflow metadata for destination validation and
                     // attribution, scoped to the run's community — the same run/workflow
@@ -605,6 +641,10 @@ pub async fn dispatch_action(
                     // The trigger must carry the event to reply to; schema
                     // validation already forbids `reply_in_thread` on triggers
                     // that have no message, so an empty id here is a real fault.
+                    //
+                    // `reply_to` names its parent explicitly instead — usually
+                    // `{{steps.X.output.event_id}}`. Schema validation rejects
+                    // the two together, so at most one arm produces a parent.
                     let reply_to = if *reply_in_thread {
                         if trigger_ctx.message_id.is_empty() {
                             return Err(WorkflowError::InvalidDefinition(
@@ -612,6 +652,8 @@ pub async fn dispatch_action(
                             ));
                         }
                         Some(trigger_ctx.message_id.as_str())
+                    } else if let Some(explicit) = reply_to_def.as_deref() {
+                        Some(validate_reply_to(step_id, explicit)?)
                     } else {
                         None
                     };
@@ -621,6 +663,7 @@ pub async fn dispatch_action(
                         step = step_id,
                         channel = %channel_id,
                         reply_in_thread = *reply_in_thread,
+                        reply_to = reply_to.unwrap_or("none"),
                         "SendMessage → {channel_id}: {text}"
                     );
 
@@ -1476,6 +1519,7 @@ mod tests {
                 text: "hi {{trigger.author}}".to_owned(),
                 channel: None,
                 reply_in_thread: true,
+                reply_to: None,
             },
         };
         let resolved = resolve_step_templates(&step, &ctx, &HashMap::new()).unwrap();
@@ -1489,6 +1533,88 @@ mod tests {
                 assert!(reply_in_thread, "reply_in_thread must survive resolution");
             }
             other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_step_templates_resolves_reply_to_from_a_prior_step() {
+        let ctx = make_trigger();
+        let parent_id = "a".repeat(64);
+        let mut outputs = HashMap::new();
+        outputs.insert(
+            "title".to_owned(),
+            serde_json::json!({ "sent": true, "event_id": parent_id }),
+        );
+
+        let step = Step {
+            id: "body".to_owned(),
+            name: None,
+            if_expr: None,
+            timeout_secs: None,
+            action: ActionDef::SendMessage {
+                text: "the body".to_owned(),
+                channel: None,
+                reply_in_thread: false,
+                reply_to: Some("{{steps.title.output.event_id}}".to_owned()),
+            },
+        };
+        let resolved = resolve_step_templates(&step, &ctx, &outputs).unwrap();
+        match resolved {
+            ActionDef::SendMessage { reply_to, .. } => {
+                assert_eq!(reply_to.as_deref(), Some(parent_id.as_str()));
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_reply_to_accepts_a_hex_event_id() {
+        let id = "0".repeat(64);
+        assert_eq!(validate_reply_to("body", &format!("  {id}  ")).unwrap(), id);
+    }
+
+    #[test]
+    fn validate_reply_to_rejects_empty() {
+        let err = validate_reply_to("body", "   ").unwrap_err().to_string();
+        assert!(err.contains("body"), "error must name the step: {err}");
+        assert!(err.contains("empty"), "unexpected error: {err}");
+    }
+
+    /// The load-bearing arm. `resolve_template` leaves an unknown variable as
+    /// literal text, so a mistyped step id arrives here as a `{{...}}` string —
+    /// not as an empty value — and would otherwise be sent to the sink as a
+    /// parent event id.
+    #[test]
+    fn validate_reply_to_rejects_an_unresolved_template() {
+        let unresolved = resolve_template(
+            "{{steps.titel.output.event_id}}",
+            &make_trigger(),
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            unresolved, "{{steps.titel.output.event_id}}",
+            "guards the premise: an unknown variable must survive as literal text"
+        );
+
+        let err = validate_reply_to("body", &unresolved)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("body"), "error must name the step: {err}");
+        assert!(
+            err.contains("unresolved template"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_reply_to_rejects_a_non_event_id() {
+        for bad in ["not-hex", &"a".repeat(63), &"a".repeat(65), "zz"] {
+            let err = validate_reply_to("body", bad).unwrap_err().to_string();
+            assert!(
+                err.contains("64-character hex"),
+                "expected a shape error for {bad:?}, got: {err}"
+            );
         }
     }
 

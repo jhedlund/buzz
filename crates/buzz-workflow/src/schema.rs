@@ -105,6 +105,18 @@ pub enum ActionDef {
         /// carry a triggering event to reply to.
         #[serde(default)]
         reply_in_thread: bool,
+        /// Reply to an explicit event id instead of the triggering message
+        /// (supports template variables). Typically
+        /// `{{steps.<id>.output.event_id}}`, which threads one step's message
+        /// under another's — the way to post a short title and hang a long body
+        /// beneath it. Valid on every trigger type, including `webhook` and
+        /// `schedule`, because the parent comes from the definition rather than
+        /// from a triggering message.
+        ///
+        /// Mutually exclusive with `reply_in_thread`: both choose a parent, and
+        /// a definition naming two is ambiguous rather than defaultable.
+        #[serde(default)]
+        reply_to: Option<String>,
     },
     /// Send a direct message to a user.
     SendDm {
@@ -213,9 +225,30 @@ impl WorkflowDef {
             }
         }
 
+        // `reply_in_thread` and `reply_to` both choose the parent of the posted
+        // message. A definition setting both names two parents, so reject it
+        // here rather than picking one at run time.
+        for step in &self.steps {
+            if let ActionDef::SendMessage {
+                reply_in_thread: true,
+                reply_to: Some(_),
+                ..
+            } = &step.action
+            {
+                return Err(WorkflowError::InvalidDefinition(format!(
+                    "step '{}': reply_in_thread and reply_to are mutually exclusive \
+                     (both select the message to reply to); set one",
+                    step.id
+                )));
+            }
+        }
+
         // `reply_in_thread` requires a triggering message to reply to. Schedule
         // and webhook triggers have none, so reject the combination at
         // definition time rather than failing silently at run time.
+        //
+        // `reply_to` is deliberately *not* restricted this way: its parent comes
+        // from the definition, so it works on every trigger type.
         let trigger_has_message = matches!(
             self.trigger,
             TriggerDef::MessagePosted { .. }
@@ -561,6 +594,75 @@ mod tests {
         // Explicit `false` on a schedule trigger is fine — no message needed.
         let yaml = "name: OK\ntrigger:\n  on: schedule\n  cron: '0 9 * * 1-5'\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n    reply_in_thread: false\n";
         parse_yaml(yaml).expect("reply_in_thread: false on schedule should be valid");
+    }
+
+    #[test]
+    fn reply_to_defaults_none_and_round_trips() {
+        // Absent field is None — every existing definition keeps its meaning.
+        let yaml = "name: Plain\ntrigger:\n  on: message_posted\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n";
+        let (def, _) = parse_yaml(yaml).expect("parse failed");
+        match &def.steps[0].action {
+            ActionDef::SendMessage { reply_to, .. } => {
+                assert!(reply_to.is_none(), "should default to None")
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        let yaml = "name: Titled\ntrigger:\n  on: webhook\nsteps:\n  - id: title\n    action: send_message\n    text: '{{trigger.title}}'\n  - id: body\n    action: send_message\n    text: '{{trigger.report}}'\n    reply_to: '{{steps.title.output.event_id}}'\n";
+        let (def, _) = parse_yaml(yaml).expect("parse failed");
+        match &def.steps[1].action {
+            ActionDef::SendMessage { reply_to, .. } => assert_eq!(
+                reply_to.as_deref(),
+                Some("{{steps.title.output.event_id}}"),
+                "the template must survive parsing unresolved"
+            ),
+            other => panic!("unexpected action: {other:?}"),
+        }
+
+        let json = serde_json::to_string(&def).expect("serialize");
+        let reparsed: WorkflowDef = serde_json::from_str(&json).expect("json round-trip");
+        match &reparsed.steps[1].action {
+            ActionDef::SendMessage { reply_to, .. } => {
+                assert_eq!(reply_to.as_deref(), Some("{{steps.title.output.event_id}}"))
+            }
+            other => panic!("unexpected action: {other:?}"),
+        }
+    }
+
+    /// The whole point of the field: `reply_to` names its parent in the
+    /// definition, so unlike `reply_in_thread` it is valid on triggers that
+    /// carry no message.
+    #[test]
+    fn validate_accepts_reply_to_on_message_less_triggers() {
+        let webhook = "name: OK\ntrigger:\n  on: webhook\nsteps:\n  - id: title\n    action: send_message\n    text: hi\n    channel: 00000000-0000-0000-0000-000000000000\n  - id: body\n    action: send_message\n    text: body\n    channel: 00000000-0000-0000-0000-000000000000\n    reply_to: '{{steps.title.output.event_id}}'\n";
+        parse_yaml(webhook).expect("reply_to should be valid on a webhook trigger");
+
+        let schedule = "name: OK\ntrigger:\n  on: schedule\n  cron: '0 9 * * 1-5'\nsteps:\n  - id: title\n    action: send_message\n    text: hi\n  - id: body\n    action: send_message\n    text: body\n    reply_to: '{{steps.title.output.event_id}}'\n";
+        parse_yaml(schedule).expect("reply_to should be valid on a schedule trigger");
+    }
+
+    #[test]
+    fn validate_rejects_reply_to_together_with_reply_in_thread() {
+        let yaml = "name: Bad\ntrigger:\n  on: message_posted\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n    reply_in_thread: true\n    reply_to: '{{steps.other.output.event_id}}'\n";
+        let err = parse_yaml(yaml).unwrap_err();
+        match &err {
+            WorkflowError::InvalidDefinition(msg) => {
+                assert!(
+                    msg.contains("mutually exclusive"),
+                    "expected a mutual-exclusion message, got: {msg}"
+                );
+                assert!(msg.contains("s1"), "error must name the step: {msg}");
+            }
+            other => panic!("expected InvalidDefinition, got: {other}"),
+        }
+    }
+
+    /// `reply_in_thread: false` alongside `reply_to` is not ambiguous — only
+    /// one parent is named — so it must stay valid.
+    #[test]
+    fn validate_accepts_reply_to_with_reply_in_thread_false() {
+        let yaml = "name: OK\ntrigger:\n  on: message_posted\nsteps:\n  - id: s1\n    action: send_message\n    text: hi\n    reply_in_thread: false\n    reply_to: '{{steps.other.output.event_id}}'\n";
+        parse_yaml(yaml).expect("reply_in_thread: false + reply_to should be valid");
     }
 
     #[test]
