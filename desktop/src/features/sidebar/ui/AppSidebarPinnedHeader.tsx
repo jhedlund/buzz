@@ -1,4 +1,11 @@
-import { Activity, Bot, Folders, Inbox, Zap } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  Folders,
+  Inbox,
+  MessagesSquare,
+  Zap,
+} from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { SidebarProjectsSection } from "@/features/sidebar/ui/SidebarProjectsSection";
@@ -21,7 +28,8 @@ type SidebarSelectedView =
   | "agents"
   | "workflows"
   | "pulse"
-  | "projects";
+  | "projects"
+  | "threads";
 
 type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
@@ -45,6 +53,7 @@ type AppSidebarPrimaryMenuProps = {
   onSelectHome: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
+  onSelectThreads: () => void;
   onSelectWorkflows: () => void;
   projectsOverviewActive: boolean;
   selectedView: SidebarSelectedView;
@@ -95,6 +104,7 @@ export function AppSidebarPrimaryMenu({
   onSelectHome,
   onSelectProjects,
   onSelectPulse,
+  onSelectThreads,
   onSelectWorkflows,
   projectsOverviewActive,
   selectedView,
@@ -126,6 +136,19 @@ export function AppSidebarPrimaryMenu({
                 {Math.min(homeBadgeCount, 99)}
               </SidebarMenuBadge>
             ) : null}
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              className="data-[active=true]:font-normal"
+              data-testid="open-threads-view"
+              isActive={selectedView === "threads"}
+              onClick={onSelectThreads}
+              tooltip="Threads"
+              type="button"
+            >
+              <MessagesSquare className="h-4 w-4" />
+              <SidebarMenuLabel>Threads</SidebarMenuLabel>
+            </SidebarMenuButton>
           </SidebarMenuItem>
           <FeatureGate feature="pulse">
             <SidebarMenuItem>
