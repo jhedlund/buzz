@@ -168,6 +168,9 @@ test.describe("thread titles", () => {
     await expect(page.getByTestId("threads-view")).toContainText(
       "No named threads",
     );
+    await expect(page.getByTestId("threads-view-subheader")).toHaveText(
+      "Named threads, most recent activity first. Name any thread from its header.",
+    );
   });
 
   test("unread replies in a named thread show in the Threads view and sidebar", async ({
