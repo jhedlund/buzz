@@ -6,7 +6,6 @@ import type {
 } from "@/features/messages/lib/threadPanel";
 import type { TimelineMessage } from "@/features/messages/types";
 import type { ThreadDepthGuideAction } from "@/features/messages/ui/MessageRow";
-import { useThreadTitleForRoot } from "@/features/threads/hooks";
 import { MaskedAvatarBadgeFrame } from "@/features/profile/ui/MaskedAvatarBadgeFrame";
 import { formatThreadSummaryLastReplyTime } from "@/features/messages/lib/dateFormatters";
 import {
@@ -119,15 +118,10 @@ export function MessageThreadSummaryRow({
   const surfaceInsetStart = `calc(${contentPaddingStart} - ${threadReplyLength(
     THREAD_SUMMARY_SURFACE_AVATAR_INSET_REM,
   )})`;
-  // Titles belong to whole threads, so nested sub-thread summaries show none.
-  const isThreadRoot = !message.rootId || message.rootId === message.id;
-  const threadTitle = useThreadTitleForRoot(isThreadRoot ? message.id : null);
   const replyLabel = summary.replyCount === 1 ? "reply" : "replies";
-  const summaryAriaLabel = `View thread${threadTitle ? ` "${threadTitle}"` : ""} with ${summary.replyCount} ${replyLabel}${
-    summary.lastReplyAt
-      ? `, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}`
-      : ""
-  }`;
+  const summaryAriaLabel = summary.lastReplyAt
+    ? `View thread with ${summary.replyCount} ${replyLabel}, last reply ${formatThreadSummaryLastReplyTime(summary.lastReplyAt)}`
+    : `View thread with ${summary.replyCount} ${replyLabel}`;
   const guideDepths = depthGuideDepths
     ? [...depthGuideDepths]
     : Array.from({ length: Math.max(0, depth - 1) }, (_, index) => index + 1);
@@ -274,20 +268,7 @@ export function MessageThreadSummaryRow({
           ))}
         </div>
         <div className="relative z-10 min-w-0">
-          <div className="truncate">
-            {threadTitle ? (
-              <>
-                <span
-                  className="font-semibold text-foreground"
-                  data-testid="message-thread-summary-title"
-                >
-                  {threadTitle}
-                </span>
-                <span className="mx-1 font-normal text-muted-foreground/50">
-                  ·
-                </span>
-              </>
-            ) : null}
+          <div>
             <span className="font-medium transition-colors group-hover:text-foreground">
               {summary.replyCount} {replyLabel}
             </span>

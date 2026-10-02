@@ -134,6 +134,8 @@ export function MessageRowItem({
 
   if (summary && onOpenThread) {
     const isHighlighted = message.id === highlightedMessageId;
+    // Titles belong to whole threads, so nested sub-thread heads show none.
+    const isThreadRoot = !message.rootId || message.rootId === message.id;
     return (
       <div
         className={cn(
@@ -175,8 +177,10 @@ export function MessageRowItem({
               ? () => unfollowThreadById(effectiveThreadRootId)
               : undefined
           }
+          onOpenThreadTitle={() => onOpenThread(message)}
           profiles={profiles}
           showDepthGuides={false}
+          threadTitleRootId={isThreadRoot ? message.id : null}
           videoReviewContext={videoReviewContext}
         />
         <MessageThreadSummaryRow

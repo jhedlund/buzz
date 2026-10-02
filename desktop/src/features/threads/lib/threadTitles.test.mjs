@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   applyTitleWrite,
+  countUnreadByTitledRoot,
   findThreadTitle,
   findThreadTitleByRoot,
   interpretTitleDraft,
@@ -89,5 +90,28 @@ test("applyTitleWrite moves a renamed thread to the top and drops a cleared one"
   assert.deepEqual(
     cleared.map((t) => t.rootId),
     [OTHER_ROOT],
+  );
+});
+
+test("countUnreadByTitledRoot counts unread replies of titled threads only", () => {
+  const titles = [entry(), entry({ rootId: OTHER_ROOT, title: "Other" })];
+  const counts = countUnreadByTitledRoot(titles, [
+    { id: "r1", rootId: ROOT },
+    { id: "r2", rootId: ROOT.toUpperCase() },
+    // The same reply surfaced twice (live activity and a reopened Inbox row).
+    { id: "r2", rootId: ROOT },
+    // Untitled thread and a reply with no resolvable root are ignored.
+    { id: "r3", rootId: "c".repeat(64) },
+    { id: "r4", rootId: null },
+  ]);
+  assert.deepEqual([...counts], [[ROOT, 2]]);
+  // A titled thread with nothing unread has no entry rather than a zero.
+  assert.equal(counts.has(OTHER_ROOT), false);
+});
+
+test("countUnreadByTitledRoot is empty before titles load", () => {
+  assert.equal(
+    countUnreadByTitledRoot(undefined, [{ id: "r1", rootId: ROOT }]).size,
+    0,
   );
 });

@@ -2,8 +2,11 @@ import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { useAppShell } from "@/app/AppShellContext";
+import { getThreadReference } from "@/features/messages/lib/threading";
 import {
   applyTitleWrite,
+  countUnreadByTitledRoot,
   describeTitleSaveError,
   findThreadTitle,
   findThreadTitleByRoot,
@@ -45,6 +48,26 @@ export function useThreadTitle(
 export function useThreadTitleForRoot(rootId: string | null): string | null {
   const query = useThreadTitlesQuery();
   return findThreadTitleByRoot(query.data, rootId)?.title ?? null;
+}
+
+/**
+ * Unread reply counts per titled thread, keyed by root id. Uses the same
+ * thread read state as the channel sidebar's unread dot, so the two agree.
+ */
+export function useTitledThreadUnreadCounts(): ReadonlyMap<string, number> {
+  const query = useThreadTitlesQuery();
+  const { unreadThreadFeedItems } = useAppShell();
+  return React.useMemo(
+    () =>
+      countUnreadByTitledRoot(
+        query.data,
+        unreadThreadFeedItems.map((item) => ({
+          id: item.id,
+          rootId: getThreadReference(item.tags).rootId,
+        })),
+      ),
+    [query.data, unreadThreadFeedItems],
+  );
 }
 
 export function useSetThreadTitleMutation() {

@@ -104,3 +104,26 @@ export function applyTitleWrite(
     ...rest,
   ];
 }
+
+/**
+ * Unread reply counts per thread root, for the titled threads only. Replies
+ * are counted once each, so a reply listed twice (live activity plus a
+ * reopened Inbox row) can't inflate a count.
+ */
+export function countUnreadByTitledRoot(
+  titles: readonly ThreadTitle[] | undefined,
+  unreadReplies: ReadonlyArray<{ id: string; rootId: string | null }>,
+): Map<string, number> {
+  const titledRoots = new Set((titles ?? []).map((entry) => entry.rootId));
+  const seen = new Set<string>();
+  const counts = new Map<string, number>();
+  for (const reply of unreadReplies) {
+    const root = reply.rootId?.toLowerCase();
+    if (!root || !titledRoots.has(root) || seen.has(reply.id)) {
+      continue;
+    }
+    seen.add(reply.id);
+    counts.set(root, (counts.get(root) ?? 0) + 1);
+  }
+  return counts;
+}

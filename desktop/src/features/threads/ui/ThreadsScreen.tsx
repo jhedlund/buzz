@@ -9,11 +9,15 @@ import {
 } from "@/features/channels/openChannelDirectory";
 import { formatRelativeTime } from "@/features/forum/lib/time";
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
-import { useThreadTitlesQuery } from "@/features/threads/hooks";
+import {
+  useThreadTitlesQuery,
+  useTitledThreadUnreadCounts,
+} from "@/features/threads/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { ThreadTitle } from "@/shared/api/tauriThreadTitles";
 import type { Channel } from "@/shared/api/types";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
 
@@ -33,21 +37,46 @@ function ThreadRow({
   currentPubkey,
   entry,
   onOpen,
+  unreadCount,
 }: {
   channel: Channel | undefined;
   currentPubkey: string | undefined;
   entry: ThreadTitle;
   onOpen: (entry: ThreadTitle, channel: Channel | undefined) => void;
+  unreadCount: number;
 }) {
+  const hasUnread = unreadCount > 0;
   return (
     <button
       className="flex w-full min-w-0 flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
       data-testid="threads-view-row"
+      data-unread={hasUnread ? "true" : undefined}
       onClick={() => onOpen(entry, channel)}
       type="button"
     >
-      <span className="w-full truncate text-sm font-medium text-foreground">
-        {entry.title}
+      <span className="flex w-full min-w-0 items-center gap-2">
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate text-sm",
+            hasUnread
+              ? "font-bold text-foreground"
+              : "font-normal text-foreground/80",
+          )}
+        >
+          {entry.title}
+        </span>
+        {hasUnread ? (
+          <span
+            className="flex shrink-0 items-center gap-1.5 text-xs font-medium text-primary"
+            data-testid="threads-view-row-unread"
+          >
+            <span
+              aria-hidden="true"
+              className="h-2 w-2 rounded-full bg-primary"
+            />
+            {unreadCount} new
+          </span>
+        ) : null}
       </span>
       <span className="flex w-full min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
         <span className="min-w-0 truncate">
@@ -64,6 +93,7 @@ function ThreadRow({
 
 function ThreadsBody() {
   const titlesQuery = useThreadTitlesQuery({ refetchInterval: true });
+  const unreadCounts = useTitledThreadUnreadCounts();
   const channelsQuery = useChannelsQuery();
   const currentPubkey = useIdentityQuery().data?.pubkey;
   const { goChannel, goForumPost } = useAppNavigation();
@@ -155,6 +185,7 @@ function ThreadsBody() {
             currentPubkey={currentPubkey}
             entry={entry}
             onOpen={handleOpen}
+            unreadCount={unreadCounts.get(entry.rootId) ?? 0}
           />
         </li>
       ))}
