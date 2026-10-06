@@ -104,6 +104,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goThreads = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/threads",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goProfile = React.useCallback(
     (pubkey: string, behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -472,6 +483,7 @@ export function useAppNavigation() {
     goPulse,
     goProfile,
     goSettings,
+    goThreads,
     goWorkflow,
     goWorkflows,
     openSearchHit,

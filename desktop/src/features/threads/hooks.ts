@@ -1,0 +1,160 @@
+import * as React from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+
+import { useAppShell } from "@/app/AppShellContext";
+import { getThreadReference } from "@/features/messages/lib/threading";
+import {
+  applyTitleWrite,
+  countUnreadByTitledRoot,
+  describeTitleSaveError,
+  findThreadTitle,
+  findThreadTitleByRoot,
+  THREAD_TITLES_QUERY_KEY,
+} from "@/features/threads/lib/threadTitles";
+import { relayClient } from "@/shared/api/relayClient";
+import {
+  listThreadTitles,
+  setThreadTitle,
+  type ThreadTitle,
+} from "@/shared/api/tauriThreadTitles";
+import { KIND_ARTIFACT, KIND_ARTIFACT_REMOVAL } from "@/shared/constants/kinds";
+
+/** Titles live in other channels too; poll so the Threads view stays current. */
+const THREAD_TITLES_REFRESH_MS = 60_000;
+const LIVE_RETRY_MS = 5_000;
+
+/** Every titled thread the user can read, most recently active first. */
+export function useThreadTitlesQuery(options?: { refetchInterval?: boolean }) {
+  return useQuery({
+    queryKey: THREAD_TITLES_QUERY_KEY,
+    queryFn: listThreadTitles,
+    staleTime: 30_000,
+    refetchInterval: options?.refetchInterval
+      ? THREAD_TITLES_REFRESH_MS
+      : false,
+  });
+}
+
+export function useThreadTitle(
+  channelId: string | null,
+  rootId: string | null,
+): ThreadTitle | null {
+  const query = useThreadTitlesQuery();
+  return findThreadTitle(query.data, channelId, rootId);
+}
+
+/** Title for a thread root without knowing its channel; `null` skips the lookup. */
+export function useThreadTitleForRoot(rootId: string | null): string | null {
+  const query = useThreadTitlesQuery();
+  return findThreadTitleByRoot(query.data, rootId)?.title ?? null;
+}
+
+/**
+ * Unread reply counts per titled thread, keyed by root id. Uses the same
+ * thread read state as the channel sidebar's unread dot, so the two agree.
+ */
+export function useTitledThreadUnreadCounts(): ReadonlyMap<string, number> {
+  const query = useThreadTitlesQuery();
+  const { unreadThreadFeedItems } = useAppShell();
+  return React.useMemo(
+    () =>
+      countUnreadByTitledRoot(
+        query.data,
+        unreadThreadFeedItems.map((item) => ({
+          id: item.id,
+          rootId: getThreadReference(item.tags).rootId,
+        })),
+      ),
+    [query.data, unreadThreadFeedItems],
+  );
+}
+
+export function useSetThreadTitleMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: setThreadTitle,
+    onMutate: async (write) => {
+      await queryClient.cancelQueries({ queryKey: THREAD_TITLES_QUERY_KEY });
+      const previous = queryClient.getQueryData<ThreadTitle[]>(
+        THREAD_TITLES_QUERY_KEY,
+      );
+      queryClient.setQueryData<ThreadTitle[]>(THREAD_TITLES_QUERY_KEY, (old) =>
+        applyTitleWrite(old, write, Math.floor(Date.now() / 1000)),
+      );
+      return { previous };
+    },
+    onSuccess: (result, write) => {
+      queryClient.setQueryData<ThreadTitle[]>(THREAD_TITLES_QUERY_KEY, (old) =>
+        applyTitleWrite(
+          old,
+          { ...write, title: result.title, revision: result.revision },
+          Math.floor(Date.now() / 1000),
+        ),
+      );
+    },
+    // Hook-level so the toast still shows when the editor unmounted on blur.
+    onError: (error, _write, context) => {
+      queryClient.setQueryData(THREAD_TITLES_QUERY_KEY, context?.previous);
+      toast.error(describeTitleSaveError(error));
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: THREAD_TITLES_QUERY_KEY });
+    },
+  });
+}
+
+/**
+ * Refetch titles when anyone edits an artifact in this channel. Artifact type
+ * can't be filtered on a live REQ, so any artifact change triggers a refetch.
+ */
+export function useThreadTitleLiveSync(channelId: string | null) {
+  const queryClient = useQueryClient();
+  const handleArtifactEvent = React.useEffectEvent(() => {
+    void queryClient.invalidateQueries({ queryKey: THREAD_TITLES_QUERY_KEY });
+  });
+
+  React.useEffect(() => {
+    if (!channelId) {
+      return;
+    }
+    let isCancelled = false;
+    let dispose: (() => Promise<void>) | null = null;
+    let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+    const subscribe = () => {
+      relayClient
+        .subscribeLive(
+          {
+            kinds: [KIND_ARTIFACT, KIND_ARTIFACT_REMOVAL],
+            "#h": [channelId],
+            limit: 0,
+            since: Math.floor(Date.now() / 1000),
+          },
+          handleArtifactEvent,
+        )
+        .then((nextDispose) => {
+          if (isCancelled) {
+            void nextDispose();
+            return;
+          }
+          dispose = nextDispose;
+        })
+        .catch((error: unknown) => {
+          console.error("Failed to subscribe to thread title changes", error);
+          if (!isCancelled) {
+            retryTimer = globalThis.setTimeout(subscribe, LIVE_RETRY_MS);
+          }
+        });
+    };
+    subscribe();
+
+    return () => {
+      isCancelled = true;
+      if (retryTimer !== null) {
+        globalThis.clearTimeout(retryTimer);
+      }
+      void dispose?.();
+    };
+  }, [channelId]);
+}

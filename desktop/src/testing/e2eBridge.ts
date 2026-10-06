@@ -3408,6 +3408,18 @@ type MockCanvasRevision = {
 };
 let mockCanvasRevisions = new Map<string, MockCanvasRevision[]>();
 
+type MockThreadTitle = {
+  title: string;
+  channel: string;
+  root: string;
+  revision: string;
+  author: string;
+  updated_at: number;
+  last_activity_at: number;
+};
+/** Keyed by `${channel}:${root}`; mirrors list_thread_titles / set_thread_title. */
+let mockThreadTitles = new Map<string, MockThreadTitle>();
+
 // The canvas UI reaches the mock via the starter "general" channel in specs.
 const DEFAULT_STARTER_CANVAS_CHANNEL = STARTER_GENERAL_CHANNEL_ID;
 
@@ -11510,6 +11522,7 @@ export function maybeInstallE2eTauriMocks() {
   resetMockTeamCatalogEvents(config);
   resetMockSaveSubscriptions(config);
   resetMockCanvasRevisions(config);
+  mockThreadTitles = new Map();
   resetMockPendingCommunityDeepLinks(config);
   resetMockPendingNavigationDeepLinks(config);
   resetMockPendingEntityDeepLinks(config);
@@ -14950,6 +14963,46 @@ export function maybeInstallE2eTauriMocks() {
         };
         mockCanvasRevisions.set(req.channelId, [revision, ...stream]);
         return { ok: true, event_id: revision.eventId, verified: true };
+      }
+      case "list_thread_titles": {
+        return [...mockThreadTitles.values()].sort(
+          (a, b) => b.last_activity_at - a.last_activity_at,
+        );
+      }
+      case "set_thread_title": {
+        const req = payload as {
+          channelId: string;
+          rootId: string;
+          title: string | null;
+          expectedRevision: string | null;
+        };
+        const root = req.rootId.toLowerCase();
+        const key = `${req.channelId}:${root}`;
+        // Mirror the command's compare-and-set: edits apply only to the
+        // revision they started from.
+        if (
+          (mockThreadTitles.get(key)?.revision ?? null) !== req.expectedRevision
+        ) {
+          throw new Error(
+            "conflict: someone else changed this thread's title while you were editing",
+          );
+        }
+        const title = req.title?.trim() ?? "";
+        if (!title) {
+          mockThreadTitles.delete(key);
+          return { title: null, revision: null };
+        }
+        const now = Math.floor(Date.now() / 1000);
+        mockThreadTitles.set(key, {
+          title,
+          channel: req.channelId,
+          root,
+          revision: mockEventId(),
+          author: DEFAULT_MOCK_IDENTITY.pubkey,
+          updated_at: now,
+          last_activity_at: now,
+        });
+        return { title, revision: mockThreadTitles.get(key)?.revision ?? null };
       }
       case "get_canvas": {
         const canvasReadError = activeConfig?.mock?.canvasReadError;

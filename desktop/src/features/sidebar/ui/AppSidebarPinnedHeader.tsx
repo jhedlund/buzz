@@ -1,8 +1,17 @@
-import { Activity, Bot, Folders, Inbox, Zap } from "lucide-react";
+import {
+  Activity,
+  Bot,
+  Folders,
+  Inbox,
+  MessagesSquare,
+  Zap,
+} from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { SidebarProjectsSection } from "@/features/sidebar/ui/SidebarProjectsSection";
+import { useTitledThreadUnreadCounts } from "@/features/threads/hooks";
 import { FeatureGate } from "@/shared/features";
+import { cn } from "@/shared/lib/cn";
 import type { Channel, SearchHit } from "@/shared/api/types";
 import {
   SidebarHeader,
@@ -21,7 +30,8 @@ type SidebarSelectedView =
   | "agents"
   | "workflows"
   | "pulse"
-  | "projects";
+  | "projects"
+  | "threads";
 
 type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
@@ -45,6 +55,7 @@ type AppSidebarPrimaryMenuProps = {
   onSelectHome: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
+  onSelectThreads: () => void;
   onSelectWorkflows: () => void;
   projectsOverviewActive: boolean;
   selectedView: SidebarSelectedView;
@@ -89,12 +100,51 @@ export function AppSidebarPinnedHeader({
   );
 }
 
+/** Bold with a dot while any titled thread has unread replies, like a channel row. */
+function ThreadsMenuItem({
+  isActive,
+  onSelect,
+}: {
+  isActive: boolean;
+  onSelect: () => void;
+}) {
+  const hasUnread = useTitledThreadUnreadCounts().size > 0;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        className={cn(
+          "data-[active=true]:font-normal",
+          hasUnread &&
+            "font-bold text-sidebar-foreground hover:text-sidebar-foreground data-[active=true]:font-bold",
+        )}
+        data-testid="open-threads-view"
+        isActive={isActive}
+        onClick={onSelect}
+        tooltip="Threads"
+        type="button"
+      >
+        <MessagesSquare className="h-4 w-4" />
+        <SidebarMenuLabel>Threads</SidebarMenuLabel>
+        {hasUnread ? (
+          <span
+            className="ml-auto h-2 w-2 shrink-0 rounded-full bg-primary"
+            data-testid="threads-unread-dot"
+          >
+            <span className="sr-only">unread</span>
+          </span>
+        ) : null}
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
+
 export function AppSidebarPrimaryMenu({
   homeBadgeCount,
   onSelectAgents,
   onSelectHome,
   onSelectProjects,
   onSelectPulse,
+  onSelectThreads,
   onSelectWorkflows,
   projectsOverviewActive,
   selectedView,
@@ -127,6 +177,10 @@ export function AppSidebarPrimaryMenu({
               </SidebarMenuBadge>
             ) : null}
           </SidebarMenuItem>
+          <ThreadsMenuItem
+            isActive={selectedView === "threads"}
+            onSelect={onSelectThreads}
+          />
           <FeatureGate feature="pulse">
             <SidebarMenuItem>
               <SidebarMenuButton
