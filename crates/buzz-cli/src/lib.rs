@@ -848,6 +848,10 @@ pub enum ThreadTitleCmd {
         /// Title text, at most 512 UTF-8 bytes
         #[arg(long)]
         title: String,
+        /// Only name a thread that has never had a title; an existing or
+        /// cleared title is left alone and reported as "already titled"
+        #[arg(long)]
+        if_unset: bool,
     },
     /// Remove a thread's title
     Clear {

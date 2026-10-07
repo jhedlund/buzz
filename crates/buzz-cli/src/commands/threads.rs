@@ -40,17 +40,37 @@ fn is_head_conflict(err: &CliError) -> bool {
     matches!(err, CliError::Relay { status: 409, body } if is_thread_title_head_conflict(body))
 }
 
+/// `--if-unset` writes only a thread's first title. Any existing head, including
+/// a cleared one, means someone already decided, so it is left alone.
+fn skip_existing_title(if_unset: bool, head: Option<&ThreadTitleHead>) -> bool {
+    if_unset && head.is_some()
+}
+
 async fn write_title(
     client: &BuzzClient,
     channel: &str,
     event: &str,
     desired: Option<&str>,
+    if_unset: bool,
 ) -> Result<(), CliError> {
     let channel = parse_uuid(channel)?;
     let root = resolve_root(client, channel, event).await?;
     let id = thread_title_id(&root).to_string();
     for attempt in 1..=MAX_THREAD_TITLE_WRITE_ATTEMPTS {
         let head = fetch_head(client, &root).await?;
+        if skip_existing_title(if_unset, head.as_ref()) {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "event_id": head.map(|h| h.event_id),
+                    "accepted": true,
+                    "message": "already titled",
+                    "artifact": id,
+                    "root": root,
+                })
+            );
+            return Ok(());
+        }
         let plan = plan_thread_title(head.as_ref(), desired);
         let Some(builder) = build_thread_title_revision(channel, &root, &plan, desired)
             .map_err(|e| CliError::Other(e.to_string()))?
@@ -133,14 +153,15 @@ pub async fn dispatch(cmd: crate::ThreadsCmd, client: &BuzzClient) -> Result<(),
                 channel,
                 event,
                 title,
+                if_unset,
             } => {
                 let title = normalize_thread_title(&title).map_err(|e| {
                     CliError::Usage(format!("{e} (use `threads title clear` to remove a title)"))
                 })?;
-                write_title(client, &channel, &event, Some(&title)).await
+                write_title(client, &channel, &event, Some(&title), if_unset).await
             }
             ThreadTitleCmd::Clear { channel, event } => {
-                write_title(client, &channel, &event, None).await
+                write_title(client, &channel, &event, None, false).await
             }
             ThreadTitleCmd::Get { channel, event } => cmd_get(client, &channel, &event).await,
             ThreadTitleCmd::List { channel, limit } => {
@@ -173,5 +194,18 @@ mod tests {
             "conflict: artifact home changed"
         )));
         assert!(!is_head_conflict(&relay(400, "artifact head changed")));
+    }
+
+    #[test]
+    fn if_unset_skips_live_and_cleared_titles_but_not_untitled_threads() {
+        let head = |deleted| ThreadTitleHead {
+            event_id: "e".repeat(64),
+            deleted,
+            title: (!deleted).then(|| "Existing".into()),
+        };
+        assert!(!skip_existing_title(true, None));
+        assert!(skip_existing_title(true, Some(&head(false))));
+        assert!(skip_existing_title(true, Some(&head(true))));
+        assert!(!skip_existing_title(false, Some(&head(false))));
     }
 }

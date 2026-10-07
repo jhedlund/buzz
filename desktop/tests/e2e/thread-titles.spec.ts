@@ -19,7 +19,11 @@ const MOCK_IDENTITY_PUBKEY = "deadbeef".repeat(8);
 const ALICE_PUBKEY =
   "953d3363262e86b770419834c53d2446409db6d918a57f8f339d495d54ab001f";
 
-async function openThread(page: Page, rootContent: string): Promise<string> {
+async function openThread(
+  page: Page,
+  rootContent: string,
+  options: { newest?: boolean } = {},
+): Promise<string> {
   await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL_NAME);
   await expect
@@ -35,6 +39,9 @@ async function openThread(page: Page, rootContent: string): Promise<string> {
     )
     .toBe(true);
 
+  const summariesBefore = await page
+    .getByTestId("message-thread-summary")
+    .count();
   const rootId = await page.evaluate(
     ({ channelName, content, pubkey }) =>
       (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
@@ -60,11 +67,21 @@ async function openThread(page: Page, rootContent: string): Promise<string> {
     },
     { channelName: CHANNEL_NAME, parentEventId: rootId, pubkey: ALICE_PUBKEY },
   );
-  await page
-    .locator('[data-testid^="reply-message-"]')
-    .first()
-    .click({ force: true });
-  await expect(page.getByTestId("message-thread-panel")).toBeVisible();
+  if (options.newest) {
+    // Once an earlier thread exists, a new root renders only its summary row.
+    // Wait for it, or `.last()` can still resolve to the earlier thread's.
+    const summaries = page.getByTestId("message-thread-summary");
+    await expect(summaries).toHaveCount(summariesBefore + 1);
+    await summaries.last().click();
+  } else {
+    await page
+      .locator('[data-testid^="reply-message-"]')
+      .first()
+      .click({ force: true });
+  }
+  const panel = page.getByTestId("message-thread-panel");
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(rootContent);
   return rootId as string;
 }
 
@@ -169,7 +186,7 @@ test.describe("thread titles", () => {
       "No named threads",
     );
     await expect(page.getByTestId("threads-view-subheader")).toHaveText(
-      "Named threads, most recent activity first. Name any thread from its header.",
+      "Named threads, most recent activity first. Name any thread from its header; pin one to keep it at the top.",
     );
   });
 
@@ -205,5 +222,46 @@ test.describe("thread titles", () => {
     await expect(page.getByTestId("threads-unread-dot")).toHaveCount(0);
     await page.getByTestId("open-threads-view").click();
     await expect(row).not.toHaveAttribute("data-unread", "true");
+  });
+
+  test("a pinned thread stays above more recently active ones", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    await openThread(page, "Root of the thread to pin.");
+    await nameOpenThread(page, "Pin me");
+    const busyRoot = await openThread(page, "Root of a busier thread.", {
+      newest: true,
+    });
+    await nameOpenThread(page, "Busy thread");
+
+    await page.getByTestId("open-threads-view").click();
+    const rows = page.getByTestId("threads-view-row");
+    await expect(rows).toHaveText([/Busy thread/, /Pin me/]);
+    await expect(page.getByTestId("threads-view-pinned")).toHaveCount(0);
+
+    const pinMe = page
+      .getByRole("listitem")
+      .filter({ hasText: "Pin me" })
+      .getByTestId("threads-view-row-pin");
+    await pinMe.click();
+    await expect(pinMe).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("threads-view-pinned")).toContainText(
+      "Pin me",
+    );
+    await expect(rows).toHaveText([/Pin me/, /Busy thread/]);
+
+    // New activity elsewhere doesn't move a thread above a pin, and the pin
+    // survives leaving and reopening the view.
+    await emitReply(page, busyRoot, "More activity in the busy thread.");
+    await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+    await page.getByTestId("open-threads-view").click();
+    await expect(rows).toHaveText([/Pin me/, /Busy thread/]);
+
+    await pinMe.click();
+    await expect(page.getByTestId("threads-view-pinned")).toHaveCount(0);
+    await expect(pinMe).toHaveAttribute("aria-pressed", "false");
+    await expect(rows).toHaveText([/Busy thread/, /Pin me/]);
   });
 });
