@@ -6,6 +6,7 @@ import { useAppShell } from "@/app/AppShellContext";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import {
   applyTitleWrite,
+  batchTitleSyncChannels,
   countUnreadByTitledRoot,
   describeTitleSaveError,
   findThreadTitle,
@@ -105,29 +106,33 @@ export function useSetThreadTitleMutation() {
 }
 
 /**
- * Refetch titles when anyone edits an artifact in this channel. Artifact type
- * can't be filtered on a live REQ, so any artifact change triggers a refetch.
+ * Refetch titles when anyone edits an artifact in these channels. Artifact
+ * type can't be filtered on a live REQ, so any artifact change triggers a
+ * refetch. The relay only fans channel events out to subscriptions that name
+ * the channel, so a channel-less subscription would never fire.
  */
-export function useThreadTitleLiveSync(channelId: string | null) {
+export function useThreadTitleLiveSync(channelIds: readonly string[]) {
   const queryClient = useQueryClient();
   const handleArtifactEvent = React.useEffectEvent(() => {
     void queryClient.invalidateQueries({ queryKey: THREAD_TITLES_QUERY_KEY });
   });
+  const batchesKey = JSON.stringify(batchTitleSyncChannels(channelIds));
 
   React.useEffect(() => {
-    if (!channelId) {
+    const batches: string[][] = JSON.parse(batchesKey);
+    if (batches.length === 0) {
       return;
     }
     let isCancelled = false;
-    let dispose: (() => Promise<void>) | null = null;
-    let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const disposers: Array<() => Promise<void>> = [];
+    const retryTimers = new Set<ReturnType<typeof globalThis.setTimeout>>();
 
-    const subscribe = () => {
+    const subscribe = (channels: string[]) => {
       relayClient
         .subscribeLive(
           {
             kinds: [KIND_ARTIFACT, KIND_ARTIFACT_REMOVAL],
-            "#h": [channelId],
+            "#h": channels,
             limit: 0,
             since: Math.floor(Date.now() / 1000),
           },
@@ -138,23 +143,35 @@ export function useThreadTitleLiveSync(channelId: string | null) {
             void nextDispose();
             return;
           }
-          dispose = nextDispose;
+          disposers.push(nextDispose);
         })
         .catch((error: unknown) => {
           console.error("Failed to subscribe to thread title changes", error);
           if (!isCancelled) {
-            retryTimer = globalThis.setTimeout(subscribe, LIVE_RETRY_MS);
+            const timer = globalThis.setTimeout(() => {
+              retryTimers.delete(timer);
+              subscribe(channels);
+            }, LIVE_RETRY_MS);
+            retryTimers.add(timer);
           }
         });
     };
-    subscribe();
+    for (const channels of batches) {
+      subscribe(channels);
+    }
+    // A title set while the socket was down never reaches the live REQ.
+    const unsubscribeReconnects =
+      relayClient.subscribeToReconnects(handleArtifactEvent);
 
     return () => {
       isCancelled = true;
-      if (retryTimer !== null) {
-        globalThis.clearTimeout(retryTimer);
+      for (const timer of retryTimers) {
+        globalThis.clearTimeout(timer);
       }
-      void dispose?.();
+      unsubscribeReconnects();
+      for (const dispose of disposers) {
+        void dispose();
+      }
     };
-  }, [channelId]);
+  }, [batchesKey]);
 }

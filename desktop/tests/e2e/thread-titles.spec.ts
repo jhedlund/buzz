@@ -7,6 +7,7 @@ type MockMessageWindow = Window & {
     channelName: string;
     content: string;
     parentEventId?: string | null;
+    createdAt?: number;
     pubkey?: string;
   }) => { id: string } | undefined;
   __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
@@ -22,7 +23,7 @@ const ALICE_PUBKEY =
 async function openThread(
   page: Page,
   rootContent: string,
-  options: { newest?: boolean } = {},
+  options: { replyCreatedAt?: number } = {},
 ): Promise<string> {
   await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
   await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL_NAME);
@@ -57,28 +58,28 @@ async function openThread(
   );
   expect(rootId).not.toBeNull();
   await page.evaluate(
-    ({ channelName, parentEventId, pubkey }) => {
+    ({ channelName, createdAt, parentEventId, pubkey }) => {
       (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName,
         content: "First reply.",
+        createdAt,
         parentEventId,
         pubkey,
       });
     },
-    { channelName: CHANNEL_NAME, parentEventId: rootId, pubkey: ALICE_PUBKEY },
+    {
+      channelName: CHANNEL_NAME,
+      createdAt: options.replyCreatedAt,
+      parentEventId: rootId,
+      pubkey: ALICE_PUBKEY,
+    },
   );
-  if (options.newest) {
-    // Once an earlier thread exists, a new root renders only its summary row.
-    // Wait for it, or `.last()` can still resolve to the earlier thread's.
-    const summaries = page.getByTestId("message-thread-summary");
-    await expect(summaries).toHaveCount(summariesBefore + 1);
-    await summaries.last().click();
-  } else {
-    await page
-      .locator('[data-testid^="reply-message-"]')
-      .first()
-      .click({ force: true });
-  }
+  // A new root collapses its reply into a summary row as it renders, so a
+  // click on the inline reply can land on a detached node. Wait for the
+  // summary instead; `.last()` alone could still resolve to an earlier one.
+  const summaries = page.getByTestId("message-thread-summary");
+  await expect(summaries).toHaveCount(summariesBefore + 1);
+  await summaries.last().click();
   const panel = page.getByTestId("message-thread-panel");
   await expect(panel).toBeVisible();
   await expect(panel).toContainText(rootContent);
@@ -231,8 +232,10 @@ test.describe("thread titles", () => {
     await page.goto("/");
     await openThread(page, "Root of the thread to pin.");
     await nameOpenThread(page, "Pin me");
+    // Both threads are created within the same second; without a later reply
+    // their activity ties and the "most recent first" order is arbitrary.
     const busyRoot = await openThread(page, "Root of a busier thread.", {
-      newest: true,
+      replyCreatedAt: Math.floor(Date.now() / 1000) + 60,
     });
     await nameOpenThread(page, "Busy thread");
 

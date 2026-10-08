@@ -233,7 +233,11 @@ export function MessageThreadPanel({
         : null,
     [channelId, disabled, threadRootId],
   );
-  useThreadTitleLiveSync(isHuddleTranscript ? null : channelId);
+  const titleSyncChannels = React.useMemo(
+    () => (isHuddleTranscript || !channelId ? [] : [channelId]),
+    [channelId, isHuddleTranscript],
+  );
+  useThreadTitleLiveSync(titleSyncChannels);
   useEscapeKey(
     onClose,
     !isHuddleTranscript && (isOverlay || isSinglePanelView || isFocusMode),

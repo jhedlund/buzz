@@ -1,3 +1,4 @@
+import * as React from "react";
 import {
   Activity,
   Bot,
@@ -9,7 +10,11 @@ import {
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { SidebarProjectsSection } from "@/features/sidebar/ui/SidebarProjectsSection";
-import { useTitledThreadUnreadCounts } from "@/features/threads/hooks";
+import { useChannelsQuery } from "@/features/channels/hooks";
+import {
+  useThreadTitleLiveSync,
+  useTitledThreadUnreadCounts,
+} from "@/features/threads/hooks";
 import { FeatureGate } from "@/shared/features";
 import { cn } from "@/shared/lib/cn";
 import type { Channel, SearchHit } from "@/shared/api/types";
@@ -108,6 +113,17 @@ function ThreadsMenuItem({
   isActive: boolean;
   onSelect: () => void;
 }) {
+  const channelsQuery = useChannelsQuery();
+  // Titles change in channels the user isn't looking at (an agent naming a
+  // new thread); without this the dot waits for the next refetch.
+  const joinedChannelIds = React.useMemo(
+    () =>
+      (channelsQuery.data ?? [])
+        .filter((channel) => channel.isMember)
+        .map((channel) => channel.id),
+    [channelsQuery.data],
+  );
+  useThreadTitleLiveSync(joinedChannelIds);
   const hasUnread = useTitledThreadUnreadCounts().size > 0;
   return (
     <SidebarMenuItem>

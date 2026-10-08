@@ -127,3 +127,22 @@ export function countUnreadByTitledRoot(
   }
   return counts;
 }
+
+/** The relay rejects a REQ naming more than 128 `#h` values. */
+export const MAX_LIVE_SYNC_CHANNELS_PER_FILTER = 128;
+
+/**
+ * Deduplicated, sorted channel batches for the title live sync. Sorting makes
+ * the batching stable so an unrelated re-render doesn't resubscribe.
+ */
+export function batchTitleSyncChannels(
+  channelIds: readonly string[],
+  batchSize = MAX_LIVE_SYNC_CHANNELS_PER_FILTER,
+): string[][] {
+  const unique = Array.from(new Set(channelIds.filter(Boolean))).sort();
+  const batches: string[][] = [];
+  for (let i = 0; i < unique.length; i += batchSize) {
+    batches.push(unique.slice(i, i + batchSize));
+  }
+  return batches;
+}

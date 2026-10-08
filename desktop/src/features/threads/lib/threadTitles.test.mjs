@@ -3,10 +3,12 @@ import test from "node:test";
 
 import {
   applyTitleWrite,
+  batchTitleSyncChannels,
   countUnreadByTitledRoot,
   findThreadTitle,
   findThreadTitleByRoot,
   interpretTitleDraft,
+  MAX_LIVE_SYNC_CHANNELS_PER_FILTER,
 } from "./threadTitles.ts";
 
 const CHANNEL = "634a9a88-e929-427c-9dc7-3b7f7194e882";
@@ -114,4 +116,21 @@ test("countUnreadByTitledRoot is empty before titles load", () => {
     countUnreadByTitledRoot(undefined, [{ id: "r1", rootId: ROOT }]).size,
     0,
   );
+});
+
+test("batchTitleSyncChannels dedupes, sorts, and splits at the relay #h cap", () => {
+  assert.deepEqual(batchTitleSyncChannels([]), []);
+  assert.deepEqual(batchTitleSyncChannels(["b", "a", "b", ""]), [["a", "b"]]);
+  const ids = Array.from(
+    { length: 130 },
+    (_, i) => `c${String(i).padStart(3, "0")}`,
+  );
+  const batches = batchTitleSyncChannels(ids.reverse());
+  assert.equal(MAX_LIVE_SYNC_CHANNELS_PER_FILTER, 128);
+  assert.deepEqual(
+    batches.map((batch) => batch.length),
+    [128, 2],
+  );
+  assert.equal(batches[0][0], "c000");
+  assert.equal(batches[1][1], "c129");
 });
