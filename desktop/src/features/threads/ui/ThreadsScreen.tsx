@@ -284,7 +284,7 @@ export function ThreadsScreen() {
         data-testid="threads-view-subheader"
       >
         Named threads, most recent activity first. Name any thread from its
-        header; pin one to keep it at the top.
+        header.
       </p>
       <div
         className="min-h-0 flex-1 overflow-y-auto"

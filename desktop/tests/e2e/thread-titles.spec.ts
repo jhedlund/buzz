@@ -187,7 +187,7 @@ test.describe("thread titles", () => {
       "No named threads",
     );
     await expect(page.getByTestId("threads-view-subheader")).toHaveText(
-      "Named threads, most recent activity first. Name any thread from its header; pin one to keep it at the top.",
+      "Named threads, most recent activity first. Name any thread from its header.",
     );
   });
 
