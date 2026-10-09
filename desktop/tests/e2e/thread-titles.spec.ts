@@ -12,7 +12,13 @@ type MockMessageWindow = Window & {
   }) => { id: string } | undefined;
   __BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?: (input: {
     channelName: string;
+    kind?: number;
   }) => boolean;
+  __BUZZ_E2E_SET_REMOTE_THREAD_TITLE__?: (input: {
+    channelName: string;
+    rootId: string;
+    title: string;
+  }) => void;
 };
 
 const CHANNEL_NAME = "engineering";
@@ -266,5 +272,67 @@ test.describe("thread titles", () => {
     await expect(page.getByTestId("threads-view-pinned")).toHaveCount(0);
     await expect(pinMe).toHaveAttribute("aria-pressed", "false");
     await expect(rows).toHaveText([/Busy thread/, /Pin me/]);
+  });
+
+  test("a title another user sets appears before anyone replies", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+    await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL_NAME);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (name) =>
+            (
+              window as MockMessageWindow
+            ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+              channelName: name,
+              kind: 45010,
+            }) ?? false,
+          CHANNEL_NAME,
+        ),
+      )
+      .toBe(true);
+
+    // Visit Threads first so the (empty) title list is cached and fresh.
+    await page.getByTestId("open-threads-view").click();
+    await expect(page.getByTestId("threads-view-row")).toHaveCount(0);
+    await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+
+    const rootId = await page.evaluate(
+      ({ channelName, pubkey }) =>
+        (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+          channelName,
+          content: "Question for an agent, no reply yet.",
+          pubkey,
+        })?.id ?? null,
+      { channelName: CHANNEL_NAME, pubkey: MOCK_IDENTITY_PUBKEY },
+    );
+    expect(rootId).not.toBeNull();
+    await expect(
+      page.getByText("Question for an agent, no reply yet."),
+    ).toBeVisible();
+
+    await page.evaluate(
+      ({ channelName, rootId }) =>
+        (window as MockMessageWindow).__BUZZ_E2E_SET_REMOTE_THREAD_TITLE__?.({
+          channelName,
+          rootId,
+          title: "Agent-named thread",
+        }),
+      { channelName: CHANNEL_NAME, rootId: rootId as string },
+    );
+
+    // Well inside the 30s staleTime: only the live refresh can deliver it.
+    await expect(page.getByTestId("thread-title-line")).toHaveText(
+      "Agent-named thread",
+      { timeout: 5_000 },
+    );
+    await page.getByTestId("open-threads-view").click();
+    await expect(page.getByTestId("threads-view-row")).toHaveText([
+      /Agent-named thread/,
+    ]);
   });
 });

@@ -199,6 +199,9 @@ export function MessageRowItem({
 
   const isSearchMatch = searchMatchingMessageIds?.has(message.id) ?? false;
   const isSearchActive = message.id === searchActiveMessageId;
+  // A root with no replies yet can already be titled (agents name the thread
+  // before they answer), so it shows the title too.
+  const isTopLevel = !message.rootId;
 
   return (
     <div
@@ -239,9 +242,13 @@ export function MessageRowItem({
             ? () => unfollowThreadById(effectiveThreadRootId)
             : undefined
         }
+        onOpenThreadTitle={
+          isTopLevel && onOpenThread ? () => onOpenThread(message) : undefined
+        }
         profiles={profiles}
         searchQuery={isSearchMatch ? searchQuery : undefined}
         showDepthGuides={false}
+        threadTitleRootId={isTopLevel ? message.id : null}
         videoReviewContext={videoReviewContext}
       />
       {footer}

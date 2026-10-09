@@ -57,6 +57,7 @@ import {
 } from "@/shared/api/customEmoji";
 import {
   KIND_AGENT_OBSERVER_FRAME,
+  KIND_ARTIFACT,
   KIND_CHANNEL_THREAD_SUMMARY,
   KIND_CHANNEL_WINDOW_BOUNDS,
   KIND_DM_VISIBILITY,
@@ -1312,6 +1313,13 @@ declare global {
     __BUZZ_E2E_EMIT_MOCK_PRESENCE__?: (input: {
       pubkey: string;
       status: PresenceStatus;
+    }) => void;
+    /** Another user titles a thread: store it and emit the artifact live. */
+    __BUZZ_E2E_SET_REMOTE_THREAD_TITLE__?: (input: {
+      channelName: string;
+      rootId: string;
+      title: string;
+      pubkey?: string;
     }) => void;
     __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
       channelName: string;
@@ -11685,6 +11693,42 @@ export function maybeInstallE2eTauriMocks() {
       id,
     );
   };
+  window.__BUZZ_E2E_SET_REMOTE_THREAD_TITLE__ = ({
+    channelName,
+    rootId,
+    title,
+    pubkey,
+  }) => {
+    const channel = mockChannels.find(
+      (candidate) => candidate.name === channelName,
+    );
+    if (!channel) {
+      throw new Error(`Mock channel ${channelName} not found.`);
+    }
+    const root = rootId.toLowerCase();
+    const author = pubkey ?? ALICE_PUBKEY;
+    const event = createMockEvent(
+      KIND_ARTIFACT,
+      title,
+      [
+        ["h", channel.id],
+        ["type", "buzz.thread-title"],
+        ["root", root],
+        ["title", title],
+      ],
+      author,
+    );
+    mockThreadTitles.set(`${channel.id}:${root}`, {
+      title,
+      channel: channel.id,
+      root,
+      revision: event.id,
+      author,
+      updated_at: event.created_at,
+      last_activity_at: event.created_at,
+    });
+    emitMockLiveEvent(channel.id, event);
+  };
   window.__BUZZ_E2E_SET_MOCK_USER_STATUS__ = ({
     text,
     emoji,
@@ -14965,9 +15009,23 @@ export function maybeInstallE2eTauriMocks() {
         return { ok: true, event_id: revision.eventId, verified: true };
       }
       case "list_thread_titles": {
-        return [...mockThreadTitles.values()].sort(
-          (a, b) => b.last_activity_at - a.last_activity_at,
-        );
+        // Mirror the command: activity is the later of the title and the
+        // newest reply; ties keep newest-revision-first.
+        return [...mockThreadTitles.values()]
+          .reverse()
+          .map((entry) => ({
+            ...entry,
+            last_activity_at: getMockMessageStore(entry.channel).reduce(
+              (latest, event) =>
+                event.tags.some(
+                  (tag) => tag[0] === "e" && tag[1] === entry.root,
+                )
+                  ? Math.max(latest, event.created_at)
+                  : latest,
+              entry.last_activity_at,
+            ),
+          }))
+          .sort((a, b) => b.last_activity_at - a.last_activity_at);
       }
       case "set_thread_title": {
         const req = payload as {
