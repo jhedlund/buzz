@@ -1,5 +1,6 @@
 import { MessagesSquare, Pin } from "lucide-react";
 import { AnimatePresence } from "motion/react";
+import { useLocation } from "@tanstack/react-router";
 import * as React from "react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
@@ -321,6 +322,19 @@ export function ThreadsScreen() {
   const closeThread = React.useCallback(() => setOpenThread(null), []);
   const { channelIsCovered: listIsCovered, markExitComplete } =
     useFocusDrawerPresence(useFocusDrawer && openThread !== null, closeThread);
+
+  // Clicking Threads in the sidebar again returns to the list.
+  const threadsResetId = useLocation({
+    select: (location) =>
+      (location.state as { threadsResetId?: unknown } | undefined)
+        ?.threadsResetId,
+  });
+  const lastResetIdRef = React.useRef(threadsResetId);
+  React.useEffect(() => {
+    if (threadsResetId === lastResetIdRef.current) return;
+    lastResetIdRef.current = threadsResetId;
+    closeThread();
+  }, [closeThread, threadsResetId]);
   const changeThreadViewMode = React.useCallback(
     (mode: ThreadViewMode) => {
       setThreadViewMode(mode);

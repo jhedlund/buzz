@@ -106,13 +106,23 @@ export function useAppNavigation() {
 
   const goThreads = React.useCallback(
     (behavior?: NavigationBehavior) =>
-      commitNavigation(
-        {
-          to: "/threads",
-        },
-        behavior,
-      ),
-    [commitNavigation],
+      // Re-selecting Threads while on it closes any open thread, so carry a
+      // fresh id the screen can react to instead of no-oping.
+      location.pathname === "/threads"
+        ? commitNavigation(
+            {
+              to: "/threads",
+              state: { threadsResetId: crypto.randomUUID() },
+            },
+            { ...behavior, replace: true },
+          )
+        : commitNavigation(
+            {
+              to: "/threads",
+            },
+            behavior,
+          ),
+    [commitNavigation, location.pathname],
   );
 
   const goProfile = React.useCallback(

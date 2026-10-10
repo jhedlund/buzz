@@ -503,4 +503,49 @@ test.describe("thread titles", () => {
       "Focus drawer thread",
     );
   });
+
+  test("clicking Threads in the sidebar closes the open thread", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("buzz.channels.threadViewMode", "focus");
+    });
+    await installMockBridge(page);
+    await page.goto("/");
+    await openThread(page, "Root message for the sidebar reset.");
+    await nameOpenThread(page, "Sidebar reset thread");
+    await page.keyboard.press("Escape");
+
+    await page.getByTestId("open-threads-view").click();
+    const row = page.getByTestId("threads-view-row");
+    const drawer = page.getByTestId("focus-thread-drawer");
+
+    // Focus: the drawer covers the list, but not the sidebar.
+    await row.click();
+    await expect(drawer.getByTestId("thread-title")).toHaveText(
+      "Sidebar reset thread",
+    );
+    await page.getByTestId("open-threads-view").click();
+    await expect(drawer).toHaveCount(0);
+    await expect(
+      page.locator("[inert]").getByTestId("threads-view"),
+    ).toHaveCount(0);
+
+    // Beside: the side pane closes the same way.
+    await row.click();
+    await drawer.getByTestId("thread-view-mode-toggle").click();
+    const sidePanel = page.getByTestId("message-thread-panel");
+    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
+      "Sidebar reset thread",
+    );
+    await page.getByTestId("open-threads-view").click();
+    await expect(sidePanel).toHaveCount(0);
+    await expect(row).not.toHaveAttribute("data-selected", "true");
+
+    // A reopen still works after a reset.
+    await row.click();
+    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
+      "Sidebar reset thread",
+    );
+  });
 });
