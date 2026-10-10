@@ -71,6 +71,46 @@ export function useTitledThreadUnreadCounts(): ReadonlyMap<string, number> {
   );
 }
 
+/**
+ * Reads a thread while it is open outside its channel, including replies that
+ * arrive while it stays open. Mirrors Inbox: advance each reply's own marker
+ * and the thread frontier, and drop any manual "mark unread" override.
+ */
+export function useMarkOpenThreadRead(rootId: string | null) {
+  const {
+    feedItemState,
+    markMessageRead,
+    markThreadRead,
+    unreadThreadFeedItems,
+  } = useAppShell();
+  const unread = React.useMemo(
+    () =>
+      rootId
+        ? unreadThreadFeedItems.filter(
+            (item) => getThreadReference(item.tags).rootId === rootId,
+          )
+        : [],
+    [rootId, unreadThreadFeedItems],
+  );
+
+  React.useEffect(() => {
+    if (!rootId || unread.length === 0) return;
+    let latest = 0;
+    for (const item of unread) {
+      feedItemState.undoUnread(item.id);
+      markMessageRead(item.id, item.createdAt);
+      latest = Math.max(latest, item.createdAt);
+    }
+    markThreadRead(rootId, latest);
+  }, [
+    feedItemState.undoUnread,
+    markMessageRead,
+    markThreadRead,
+    rootId,
+    unread,
+  ]);
+}
+
 export function useSetThreadTitleMutation() {
   const queryClient = useQueryClient();
   return useMutation({

@@ -33,7 +33,13 @@ async function loadConversationEvent(eventId: string) {
   return getEventById(eventId);
 }
 
-/** Channel thread shown beside project task, review, and commit details. */
+/** The event to open and, when known, its thread root. */
+export type ConversationTarget = Pick<
+  SearchHit,
+  "channelId" | "channelName" | "eventId" | "threadRootId"
+>;
+
+/** Channel thread shown beside project details and the Threads view. */
 export function ProjectConversationPanel({
   canResetWidth,
   hit,
@@ -44,7 +50,7 @@ export function ProjectConversationPanel({
   widthPx,
 }: {
   canResetWidth: boolean;
-  hit: SearchHit;
+  hit: ConversationTarget;
   onClose: () => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;

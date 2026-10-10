@@ -115,6 +115,40 @@ async function nameOpenThread(page: Page, title: string) {
   await expect(panel.getByTestId("thread-title")).toHaveText(title);
 }
 
+/**
+ * Sets titles as another user would. The title list is cached app-wide and
+ * only a title event in a live-subscribed channel invalidates it, so the last
+ * title must be in CHANNEL_NAME; that write is what makes the others show.
+ */
+async function setRemoteTitles(
+  page: Page,
+  titles: { channelName: string; rootId: string; title: string }[],
+) {
+  expect(titles.at(-1)?.channelName).toBe(CHANNEL_NAME);
+  await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        (name) =>
+          (
+            window as MockMessageWindow
+          ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+            channelName: name,
+            kind: 45010,
+          }) ?? false,
+        CHANNEL_NAME,
+      ),
+    )
+    .toBe(true);
+  await page.evaluate((titles) => {
+    for (const title of titles) {
+      (window as MockMessageWindow).__BUZZ_E2E_SET_REMOTE_THREAD_TITLE__?.(
+        title,
+      );
+    }
+  }, titles);
+}
+
 test.describe("thread titles", () => {
   test.use({ viewport: { width: 1280, height: 720 } });
 
@@ -159,11 +193,20 @@ test.describe("thread titles", () => {
     await expect(rows.first()).toContainText("Release checklist");
     await expect(rows.first()).toContainText(`#${CHANNEL_NAME}`);
 
+    // The thread opens beside the list; the Threads view stays put.
     await rows.first().click();
+    const sidePanel = page.getByTestId("message-thread-panel");
+    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
+      "Release checklist",
+    );
+    await expect(page.getByTestId("threads-view")).toBeVisible();
+    await expect(rows.first()).toHaveAttribute("data-selected", "true");
+
+    // The pane's channel header still jumps into the channel.
+    await sidePanel
+      .getByRole("button", { name: `Open #${CHANNEL_NAME}` })
+      .click();
     await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL_NAME);
-    await expect(
-      page.getByTestId("message-thread-panel").getByTestId("thread-title"),
-    ).toHaveText("Release checklist");
   });
 
   test("clearing the title removes the thread from the Threads view", async ({
@@ -334,5 +377,70 @@ test.describe("thread titles", () => {
     await expect(page.getByTestId("threads-view-row")).toHaveText([
       /Agent-named thread/,
     ]);
+  });
+
+  test("filter the Threads view by channel", async ({ page }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    await setRemoteTitles(page, [
+      { channelName: "random", rootId: "c".repeat(64), title: "Random one" },
+      { channelName: CHANNEL_NAME, rootId: "a".repeat(64), title: "Eng one" },
+      { channelName: CHANNEL_NAME, rootId: "b".repeat(64), title: "Eng two" },
+    ]);
+
+    await page.getByTestId("open-threads-view").click();
+    const rows = page.getByTestId("threads-view-row");
+    await expect(rows).toHaveCount(3);
+    const filter = page.getByTestId("threads-channel-filter");
+    await expect(filter).toHaveText("All channels");
+
+    await filter.click();
+    await expect(page.getByTestId("threads-channel-filter-option")).toHaveText([
+      /All channels\s*3/,
+      /#engineering\s*2/,
+      /#random\s*1/,
+    ]);
+    await page
+      .getByTestId("threads-channel-filter-option")
+      .filter({ hasText: "#engineering" })
+      .click();
+    await expect(filter).toHaveText(`#${CHANNEL_NAME}`);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.filter({ hasText: "Random one" })).toHaveCount(0);
+
+    // The filter holds across leaving and coming back.
+    await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+    await page.getByTestId("open-threads-view").click();
+    await expect(filter).toHaveText(`#${CHANNEL_NAME}`);
+    await expect(rows).toHaveCount(2);
+
+    await filter.click();
+    await page
+      .getByTestId("threads-channel-filter-option")
+      .filter({ hasText: "All channels" })
+      .click();
+    await expect(rows).toHaveCount(3);
+  });
+
+  test("a thread in a channel the user hasn't joined still opens the channel", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    await setRemoteTitles(page, [
+      { channelName: "design", rootId: "d".repeat(64), title: "Design review" },
+      {
+        channelName: CHANNEL_NAME,
+        rootId: "e".repeat(64),
+        title: "Eng thread",
+      },
+    ]);
+
+    await page.getByTestId("open-threads-view").click();
+    await page
+      .getByTestId("threads-view-row")
+      .filter({ hasText: "Design review" })
+      .click();
+    await expect(page.getByTestId("chat-title")).toHaveText("design");
   });
 });

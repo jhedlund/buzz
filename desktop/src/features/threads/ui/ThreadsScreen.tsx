@@ -8,21 +8,54 @@ import {
   useOpenChannelDirectoryQuery,
 } from "@/features/channels/openChannelDirectory";
 import { formatRelativeTime } from "@/features/forum/lib/time";
+import { ProjectConversationPanel } from "@/features/projects/ui/ProjectConversationPanel";
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import {
+  useMarkOpenThreadRead,
   useThreadTitlesQuery,
   useTitledThreadUnreadCounts,
 } from "@/features/threads/hooks";
+import {
+  effectiveChannelFilter,
+  filterByChannel,
+  threadChannelOptions,
+} from "@/features/threads/lib/threadChannelFilter";
 import { partitionByPin } from "@/features/threads/lib/threadPins";
 import { useThreadPins } from "@/features/threads/lib/useThreadPins";
+import { ThreadsChannelFilterMenu } from "@/features/threads/ui/ThreadsChannelFilterMenu";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
 import type { ThreadTitle } from "@/shared/api/tauriThreadTitles";
 import type { Channel } from "@/shared/api/types";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
+import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
+
+const CHANNEL_FILTER_SESSION_KEY = "buzz.desktop.threads-channel-filter";
+
+type OpenThread = { channelId: string; channelName: string; rootId: string };
+
+function readSessionFilter(): string | null {
+  try {
+    return window.sessionStorage.getItem(CHANNEL_FILTER_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeSessionFilter(channelId: string | null) {
+  try {
+    if (channelId === null) {
+      window.sessionStorage.removeItem(CHANNEL_FILTER_SESSION_KEY);
+    } else {
+      window.sessionStorage.setItem(CHANNEL_FILTER_SESSION_KEY, channelId);
+    }
+  } catch {
+    // Storage can be unavailable; the filter still works for this visit.
+  }
+}
 
 function channelLabel(
   channel: Channel | undefined,
@@ -42,6 +75,7 @@ function ThreadRow({
   onOpen,
   onTogglePin,
   pinned,
+  selected,
   unreadCount,
 }: {
   channel: Channel | undefined;
@@ -50,14 +84,22 @@ function ThreadRow({
   onOpen: (entry: ThreadTitle, channel: Channel | undefined) => void;
   onTogglePin: ((rootId: string) => void) | undefined;
   pinned: boolean;
+  selected: boolean;
   unreadCount: number;
 }) {
   const hasUnread = unreadCount > 0;
   return (
-    <div className="group/thread-row relative flex min-w-0 items-center rounded-lg hover:bg-accent focus-within:bg-accent">
+    <div
+      className={cn(
+        "group/thread-row relative flex min-w-0 items-center rounded-lg hover:bg-accent focus-within:bg-accent",
+        selected && "bg-accent",
+      )}
+    >
       <button
+        aria-current={selected ? "true" : undefined}
         className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left focus-visible:outline-none"
         data-pinned={pinned ? "true" : undefined}
+        data-selected={selected ? "true" : undefined}
         data-testid="threads-view-row"
         data-unread={hasUnread ? "true" : undefined}
         onClick={() => onOpen(entry, channel)}
@@ -119,51 +161,26 @@ function ThreadRow({
   );
 }
 
-function ThreadsBody() {
-  const titlesQuery = useThreadTitlesQuery({ refetchInterval: true });
+function ThreadsBody({
+  channelFilter,
+  channelsById,
+  currentPubkey,
+  onOpen,
+  selectedRootId,
+  titlesQuery,
+}: {
+  channelFilter: string | null;
+  channelsById: ReadonlyMap<string, Channel>;
+  currentPubkey: string | undefined;
+  onOpen: (entry: ThreadTitle, channel: Channel | undefined) => void;
+  selectedRootId: string | null;
+  titlesQuery: ReturnType<typeof useThreadTitlesQuery>;
+}) {
   const unreadCounts = useTitledThreadUnreadCounts();
-  const channelsQuery = useChannelsQuery();
-  const currentPubkey = useIdentityQuery().data?.pubkey;
   const relayOrigin = useRelayOrigin();
   const { pinned: pinnedRoots, toggle: handleTogglePin } = useThreadPins(
     relayOrigin,
     currentPubkey,
-  );
-  const { goChannel, goForumPost } = useAppNavigation();
-  // Titles also come from open channels the user hasn't joined; only then pay
-  // for the all-open directory scan (React Query dedups it across surfaces).
-  const needsDirectory =
-    channelsQuery.isSuccess &&
-    (titlesQuery.data ?? []).some(
-      (entry) =>
-        !channelsQuery.data.some((channel) => channel.id === entry.channelId),
-    );
-  const openDirectoryQuery = useOpenChannelDirectoryQuery({
-    enabled: needsDirectory,
-  });
-  const channelsById = React.useMemo(
-    () =>
-      new Map(
-        mergeOpenChannelDirectory(
-          channelsQuery.data ?? [],
-          openDirectoryQuery.data,
-        ).map((channel) => [channel.id, channel]),
-      ),
-    [channelsQuery.data, openDirectoryQuery.data],
-  );
-
-  const handleOpen = React.useCallback(
-    (entry: ThreadTitle, channel: Channel | undefined) => {
-      if (channel?.channelType === "forum") {
-        void goForumPost(entry.channelId, entry.rootId);
-        return;
-      }
-      void goChannel(entry.channelId, {
-        messageId: entry.rootId,
-        threadRootId: entry.rootId,
-      });
-    },
-    [goChannel, goForumPost],
   );
 
   if (titlesQuery.isPending) {
@@ -209,7 +226,10 @@ function ThreadsBody() {
     );
   }
 
-  const { pinned, unpinned } = partitionByPin(titlesQuery.data, pinnedRoots);
+  const { pinned, unpinned } = partitionByPin(
+    filterByChannel(titlesQuery.data, channelFilter),
+    pinnedRoots,
+  );
   const renderRows = (entries: ThreadTitle[], isPinned: boolean) =>
     entries.map((entry) => (
       <li key={`${entry.channelId}:${entry.rootId}`}>
@@ -217,9 +237,10 @@ function ThreadsBody() {
           channel={channelsById.get(entry.channelId)}
           currentPubkey={currentPubkey}
           entry={entry}
-          onOpen={handleOpen}
+          onOpen={onOpen}
           onTogglePin={handleTogglePin}
           pinned={isPinned}
+          selected={entry.rootId === selectedRootId}
           unreadCount={unreadCounts.get(entry.rootId) ?? 0}
         />
       </li>
@@ -267,33 +288,143 @@ function ThreadsBody() {
   );
 }
 
-/** Named threads across every readable channel, most recently active first. */
+/**
+ * Named threads across every readable channel, most recently active first.
+ * Threads in joined chat channels open beside the list so it keeps its place.
+ */
 export function ThreadsScreen() {
+  const titlesQuery = useThreadTitlesQuery({ refetchInterval: true });
+  const channelsQuery = useChannelsQuery();
+  const currentPubkey = useIdentityQuery().data?.pubkey;
+  const { goChannel, goForumPost } = useAppNavigation();
+  const panelWidth = useThreadPanelWidth();
+  const [openThread, setOpenThread] = React.useState<OpenThread | null>(null);
+  const [selectedFilter, setSelectedFilter] = React.useState(readSessionFilter);
+  useMarkOpenThreadRead(openThread?.rootId ?? null);
+
+  // Titles also come from open channels the user hasn't joined; only then pay
+  // for the all-open directory scan (React Query dedups it across surfaces).
+  const needsDirectory =
+    channelsQuery.isSuccess &&
+    (titlesQuery.data ?? []).some(
+      (entry) =>
+        !channelsQuery.data.some((channel) => channel.id === entry.channelId),
+    );
+  const openDirectoryQuery = useOpenChannelDirectoryQuery({
+    enabled: needsDirectory,
+  });
+  const channelsById = React.useMemo(
+    () =>
+      new Map(
+        mergeOpenChannelDirectory(
+          channelsQuery.data ?? [],
+          openDirectoryQuery.data,
+        ).map((channel) => [channel.id, channel]),
+      ),
+    [channelsQuery.data, openDirectoryQuery.data],
+  );
+  const channelOptions = React.useMemo(
+    () =>
+      threadChannelOptions(titlesQuery.data ?? [], (channelId) =>
+        channelLabel(channelsById.get(channelId), currentPubkey),
+      ),
+    [channelsById, currentPubkey, titlesQuery.data],
+  );
+  const channelFilter = titlesQuery.isSuccess
+    ? effectiveChannelFilter(selectedFilter, channelOptions)
+    : selectedFilter;
+
+  const handleFilterChange = React.useCallback((channelId: string | null) => {
+    setSelectedFilter(channelId);
+    writeSessionFilter(channelId);
+  }, []);
+
+  const handleOpen = React.useCallback(
+    (entry: ThreadTitle, channel: Channel | undefined) => {
+      if (channel?.channelType === "forum") {
+        void goForumPost(entry.channelId, entry.rootId);
+        return;
+      }
+      // The pane resolves its channel from the joined list; anything else
+      // (an open channel the user never joined) still navigates.
+      const joined = channelsQuery.data?.find(
+        (candidate) => candidate.id === entry.channelId,
+      );
+      if (!joined) {
+        void goChannel(entry.channelId, {
+          messageId: entry.rootId,
+          threadRootId: entry.rootId,
+        });
+        return;
+      }
+      setOpenThread({
+        channelId: joined.id,
+        channelName: joined.name,
+        rootId: entry.rootId,
+      });
+    },
+    [channelsQuery.data, goChannel, goForumPost],
+  );
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-      <TopChromeInsetHeader flush transparent>
-        <div className="px-5 py-2">
-          <div className="flex min-h-9 items-center gap-2">
-            <MessagesSquare className="h-4 w-4 text-muted-foreground" />
-            <h1 className="text-sm font-semibold">Threads</h1>
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <TopChromeInsetHeader flush transparent>
+          <div className="px-5 py-2">
+            <div className="flex min-h-9 items-center gap-2">
+              <MessagesSquare className="h-4 w-4 text-muted-foreground" />
+              <h1 className="text-sm font-semibold">Threads</h1>
+              {channelOptions.length > 1 ? (
+                <div className="ml-auto flex min-w-0">
+                  <ThreadsChannelFilterMenu
+                    onChange={handleFilterChange}
+                    options={channelOptions}
+                    selected={channelFilter}
+                    totalCount={titlesQuery.data?.length ?? 0}
+                  />
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </TopChromeInsetHeader>
+        <p
+          className="border-b border-border/60 px-5 pb-3 text-sm text-muted-foreground"
+          data-testid="threads-view-subheader"
+        >
+          Named threads, most recent activity first. Name any thread from its
+          header.
+        </p>
+        <div
+          className="min-h-0 flex-1 overflow-y-auto"
+          data-testid="threads-view"
+        >
+          <div className="w-full max-w-3xl px-2 pb-10 pt-2">
+            <ThreadsBody
+              channelFilter={channelFilter}
+              channelsById={channelsById}
+              currentPubkey={currentPubkey}
+              onOpen={handleOpen}
+              selectedRootId={openThread?.rootId ?? null}
+              titlesQuery={titlesQuery}
+            />
           </div>
         </div>
-      </TopChromeInsetHeader>
-      <p
-        className="border-b border-border/60 px-5 pb-3 text-sm text-muted-foreground"
-        data-testid="threads-view-subheader"
-      >
-        Named threads, most recent activity first. Name any thread from its
-        header.
-      </p>
-      <div
-        className="min-h-0 flex-1 overflow-y-auto"
-        data-testid="threads-view"
-      >
-        <div className="w-full max-w-3xl px-2 pb-10 pt-2">
-          <ThreadsBody />
-        </div>
       </div>
+      {openThread ? (
+        <ProjectConversationPanel
+          canResetWidth={panelWidth.canReset}
+          hit={{
+            channelId: openThread.channelId,
+            channelName: openThread.channelName,
+            eventId: openThread.rootId,
+            threadRootId: openThread.rootId,
+          }}
+          onClose={() => setOpenThread(null)}
+          onResetWidth={panelWidth.onResetWidth}
+          onResizeStart={panelWidth.onResizeStart}
+          widthPx={panelWidth.widthPx}
+        />
+      ) : null}
     </div>
   );
 }
