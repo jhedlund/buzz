@@ -1,12 +1,20 @@
 import { MessagesSquare, Pin } from "lucide-react";
+import { AnimatePresence } from "motion/react";
 import * as React from "react";
 
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import {
+  type ThreadViewMode,
+  setThreadViewMode,
+  useThreadViewMode,
+} from "@/features/channels/lib/threadViewModePreference";
+import {
   mergeOpenChannelDirectory,
   useOpenChannelDirectoryQuery,
 } from "@/features/channels/openChannelDirectory";
+import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
+import { useFocusDrawerPresence } from "@/features/channels/ui/useFocusDrawerPresence";
 import { formatRelativeTime } from "@/features/forum/lib/time";
 import { ProjectConversationPanel } from "@/features/projects/ui/ProjectConversationPanel";
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
@@ -28,12 +36,15 @@ import { useRelayOrigin } from "@/shared/lib/useRelayOrigin";
 import type { ThreadTitle } from "@/shared/api/tauriThreadTitles";
 import type { Channel } from "@/shared/api/types";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
+import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { useThreadPanelWidth } from "@/shared/hooks/useThreadPanelWidth";
 import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 const CHANNEL_FILTER_SESSION_KEY = "buzz.desktop.threads-channel-filter";
+
+const FOCUS_DRAWER = { backLabel: "Back to Threads" };
 
 type OpenThread = { channelId: string; channelName: string; rootId: string };
 
@@ -302,6 +313,23 @@ export function ThreadsScreen() {
   const [selectedFilter, setSelectedFilter] = React.useState(readSessionFilter);
   useMarkOpenThreadRead(openThread?.rootId ?? null);
 
+  // Threads follow the channel thread layout preference: Focus opens the
+  // large drawer over the list, Split keeps the list beside the thread.
+  const threadViewMode = useThreadViewMode();
+  const isOverlay = useIsThreadPanelOverlay();
+  const useFocusDrawer = threadViewMode === "focus" && !isOverlay;
+  const closeThread = React.useCallback(() => setOpenThread(null), []);
+  const { channelIsCovered: listIsCovered, markExitComplete } =
+    useFocusDrawerPresence(useFocusDrawer && openThread !== null, closeThread);
+  const changeThreadViewMode = React.useCallback(
+    (mode: ThreadViewMode) => {
+      setThreadViewMode(mode);
+      // Switching layouts swaps the drawer out without an exit animation.
+      markExitComplete();
+    },
+    [markExitComplete],
+  );
+
   // Titles also come from open channels the user hasn't joined; only then pay
   // for the all-open directory scan (React Query dedups it across surfaces).
   const needsDirectory =
@@ -368,7 +396,10 @@ export function ThreadsScreen() {
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div
+        className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+        inert={listIsCovered ? true : undefined}
+      >
         <TopChromeInsetHeader flush transparent>
           <div className="px-5 py-2">
             <div className="flex min-h-9 items-center gap-2">
@@ -410,21 +441,30 @@ export function ThreadsScreen() {
           </div>
         </div>
       </div>
-      {openThread ? (
-        <ProjectConversationPanel
-          canResetWidth={panelWidth.canReset}
-          hit={{
-            channelId: openThread.channelId,
-            channelName: openThread.channelName,
-            eventId: openThread.rootId,
-            threadRootId: openThread.rootId,
-          }}
-          onClose={() => setOpenThread(null)}
-          onResetWidth={panelWidth.onResetWidth}
-          onResizeStart={panelWidth.onResizeStart}
-          widthPx={panelWidth.widthPx}
-        />
-      ) : null}
+      <AnimatePresence onExitComplete={markExitComplete}>
+        {openThread ? (
+          <ProjectConversationPanel
+            canResetWidth={panelWidth.canReset}
+            focusDrawer={useFocusDrawer ? FOCUS_DRAWER : undefined}
+            headerLeading={
+              isOverlay ? undefined : (
+                <ThreadViewModeToggle onChange={changeThreadViewMode} />
+              )
+            }
+            hit={{
+              channelId: openThread.channelId,
+              channelName: openThread.channelName,
+              eventId: openThread.rootId,
+              threadRootId: openThread.rootId,
+            }}
+            key="threads-conversation"
+            onClose={closeThread}
+            onResetWidth={panelWidth.onResetWidth}
+            onResizeStart={panelWidth.onResizeStart}
+            widthPx={panelWidth.widthPx}
+          />
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }

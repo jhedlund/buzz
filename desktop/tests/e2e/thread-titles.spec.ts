@@ -443,4 +443,64 @@ test.describe("thread titles", () => {
       .click();
     await expect(page.getByTestId("chat-title")).toHaveText("design");
   });
+
+  test("Threads follows the Focus thread layout and can switch to beside", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("buzz.channels.threadViewMode", "focus");
+    });
+    await installMockBridge(page);
+    await page.goto("/");
+    await openThread(page, "Root message for the focus drawer.");
+    await nameOpenThread(page, "Focus drawer thread");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("focus-thread-drawer")).toHaveCount(0);
+
+    await page.getByTestId("open-threads-view").click();
+    const row = page.getByTestId("threads-view-row");
+    await row.click();
+
+    // Focus opens the large drawer over the list, which goes inert.
+    const drawer = page.getByTestId("focus-thread-drawer");
+    await expect(drawer.getByTestId("thread-title")).toHaveText(
+      "Focus drawer thread",
+    );
+    await expect(page.getByTestId("threads-view")).toBeVisible();
+    await expect(
+      page.locator("[inert]").getByTestId("threads-view"),
+    ).toHaveCount(1);
+
+    // The scrim goes back to the list.
+    await page
+      .getByRole("button", { name: "Back to Threads" })
+      .click({ position: { x: 20, y: 300 } });
+    await expect(drawer).toHaveCount(0);
+    await expect(
+      page.locator("[inert]").getByTestId("threads-view"),
+    ).toHaveCount(0);
+
+    // The header toggle switches to the side pane and saves the choice.
+    await row.click();
+    await drawer.getByTestId("thread-view-mode-toggle").click();
+    await expect(drawer).toHaveCount(0);
+    const sidePanel = page.getByTestId("message-thread-panel");
+    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
+      "Focus drawer thread",
+    );
+    await expect(
+      page.locator("[inert]").getByTestId("threads-view"),
+    ).toHaveCount(0);
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem("buzz.channels.threadViewMode"),
+      ),
+    ).toBe("split");
+
+    // And back to Focus from the side pane.
+    await sidePanel.getByTestId("thread-view-mode-toggle").click();
+    await expect(drawer.getByTestId("thread-title")).toHaveText(
+      "Focus drawer thread",
+    );
+  });
 });

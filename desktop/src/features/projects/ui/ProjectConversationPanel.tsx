@@ -6,6 +6,8 @@ import {
   useChannelMembersQuery,
   useChannelsQuery,
 } from "@/features/channels/hooks";
+import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout";
+import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import {
   useChannelSubscription,
@@ -39,9 +41,17 @@ export type ConversationTarget = Pick<
   "channelId" | "channelName" | "eventId" | "threadRootId"
 >;
 
+/** Opens the thread as the large focus drawer instead of the side pane. */
+export type ConversationFocusDrawer = {
+  /** Names the scrim behind the drawer, e.g. "Back to Threads". */
+  backLabel: string;
+};
+
 /** Channel thread shown beside project details and the Threads view. */
 export function ProjectConversationPanel({
   canResetWidth,
+  focusDrawer,
+  headerLeading,
   hit,
   onClose,
   onResetWidth,
@@ -50,6 +60,9 @@ export function ProjectConversationPanel({
   widthPx,
 }: {
   canResetWidth: boolean;
+  /** Ignored while the window is narrow enough for the floating overlay. */
+  focusDrawer?: ConversationFocusDrawer;
+  headerLeading?: React.ReactNode;
   hit: ConversationTarget;
   onClose: () => void;
   onResetWidth: () => void;
@@ -198,9 +211,11 @@ export function ProjectConversationPanel({
   const openChannel = React.useCallback(() => {
     if (channelId) void goChannel(channelId);
   }, [channelId, goChannel]);
+  const activeFocusDrawer = isOverlay ? undefined : focusDrawer;
   const layoutProps = {
     canResetWidth,
     enterMotion: !canShowThread,
+    headerLeading,
     headerTitle: channelLabel ? `#${channelLabel}` : "Thread",
     headerTitleAriaLabel: channelLabel ? `Open #${channelLabel}` : undefined,
     isFocusMode: false,
@@ -213,6 +228,24 @@ export function ProjectConversationPanel({
     splitPaneClamp: false,
     testId: isOverlay ? "project-conversation-panel" : "message-thread-panel",
     transparentChrome: sharedHeaderBackdrop,
+    ...(activeFocusDrawer
+      ? getThreadPanelLayout({
+          headerLeading,
+          isFocusDrawer: true,
+          isSinglePanelView: true,
+          useSplitAuxiliaryPane: true,
+        })
+      : null),
+  };
+  const paneOptions = {
+    canResetWidth,
+    channelName: activeChannel?.name ?? hit.channelName ?? "channel",
+    focusDrawer: activeFocusDrawer,
+    isOverlay,
+    onClose,
+    onResetWidth,
+    onResizeStart,
+    widthPx,
   };
 
   const handleSend = React.useCallback(
@@ -293,13 +326,7 @@ export function ProjectConversationPanel({
         threadTypingPubkeys={[]}
         widthPx={widthPx}
       />,
-      {
-        canResetWidth,
-        isOverlay,
-        onResetWidth,
-        onResizeStart,
-        widthPx,
-      },
+      paneOptions,
     );
   }
 
@@ -310,13 +337,7 @@ export function ProjectConversationPanel({
         onClose={onClose}
         widthPx={widthPx}
       />,
-      {
-        canResetWidth,
-        isOverlay,
-        onResetWidth,
-        onResizeStart,
-        widthPx,
-      },
+      paneOptions,
     );
   }
 
@@ -329,13 +350,7 @@ export function ProjectConversationPanel({
         Close
       </Button>
     </div>,
-    {
-      canResetWidth,
-      isOverlay,
-      onResetWidth,
-      onResizeStart,
-      widthPx,
-    },
+    paneOptions,
   );
 }
 
@@ -343,19 +358,36 @@ function wrapProjectConversationPane(
   panel: React.ReactNode,
   {
     canResetWidth,
+    channelName,
+    focusDrawer,
     isOverlay,
+    onClose,
     onResetWidth,
     onResizeStart,
     widthPx,
   }: {
     canResetWidth: boolean;
+    channelName: string;
+    focusDrawer: ConversationFocusDrawer | undefined;
     isOverlay: boolean;
+    onClose: () => void;
     onResetWidth: () => void;
     onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
     widthPx: number;
   },
 ) {
   if (isOverlay) return panel;
+  if (focusDrawer) {
+    return (
+      <FocusThreadDrawer
+        backLabel={focusDrawer.backLabel}
+        channelName={channelName}
+        onClose={onClose}
+      >
+        {panel}
+      </FocusThreadDrawer>
+    );
+  }
   return (
     <RightAuxiliaryPane
       canResetWidth={canResetWidth}
