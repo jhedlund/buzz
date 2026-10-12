@@ -21,6 +21,7 @@ import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageThreadPanelSkeleton } from "@/features/messages/ui/MessageThreadPanelSkeleton";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
+import { useThreadTitle } from "@/features/threads/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { SearchHit } from "@/shared/api/searchTypes";
 import { getEventById } from "@/shared/api/tauri";
@@ -57,6 +58,7 @@ export function ProjectConversationPanel({
   onResetWidth,
   onResizeStart,
   sharedHeaderBackdrop,
+  titleOpensThread = false,
   widthPx,
 }: {
   canResetWidth: boolean;
@@ -68,6 +70,11 @@ export function ProjectConversationPanel({
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   sharedHeaderBackdrop?: boolean;
+  /**
+   * The header shows the thread's title and opens the thread in its channel,
+   * like the Inbox header, instead of linking the channel with an editor.
+   */
+  titleOpensThread?: boolean;
   widthPx: number;
 }) {
   const { goChannel } = useAppNavigation();
@@ -211,17 +218,42 @@ export function ProjectConversationPanel({
   const openChannel = React.useCallback(() => {
     if (channelId) void goChannel(channelId);
   }, [channelId, goChannel]);
+  const sharedThreadTitle = useThreadTitle(channelId, rootId)?.title ?? null;
+  const openThreadInChannel = React.useCallback(() => {
+    if (channelId && rootId) {
+      void goChannel(channelId, { messageId: rootId, threadRootId: rootId });
+    }
+  }, [channelId, goChannel, rootId]);
+  const threadLinkTitle = sharedThreadTitle
+    ? channelLabel
+      ? `${sharedThreadTitle} · #${channelLabel}`
+      : sharedThreadTitle
+    : channelLabel
+      ? `Thread in #${channelLabel}`
+      : "Thread";
   const activeFocusDrawer = isOverlay ? undefined : focusDrawer;
   const layoutProps = {
     canResetWidth,
     enterMotion: !canShowThread,
     headerLeading,
-    headerTitle: channelLabel ? `#${channelLabel}` : "Thread",
-    headerTitleAriaLabel: channelLabel ? `Open #${channelLabel}` : undefined,
+    ...(titleOpensThread
+      ? {
+          headerTitle: threadLinkTitle,
+          headerTitleAriaLabel: "Open full thread",
+          onHeaderTitleClick:
+            channelId && rootId ? openThreadInChannel : undefined,
+          threadTitleEditable: false,
+        }
+      : {
+          headerTitle: channelLabel ? `#${channelLabel}` : "Thread",
+          headerTitleAriaLabel: channelLabel
+            ? `Open #${channelLabel}`
+            : undefined,
+          onHeaderTitleClick: channelId ? openChannel : undefined,
+        }),
     isFocusMode: false,
     isSinglePanelView: !isOverlay,
     layout: "standalone" as const,
-    onHeaderTitleClick: channelId ? openChannel : undefined,
     onResetWidth,
     onResizeStart,
     showBackButton: false,

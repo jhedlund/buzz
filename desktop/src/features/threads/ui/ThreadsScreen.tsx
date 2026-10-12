@@ -475,6 +475,7 @@ export function ThreadsScreen() {
             onClose={closeThread}
             onResetWidth={panelWidth.onResetWidth}
             onResizeStart={panelWidth.onResizeStart}
+            titleOpensThread
             widthPx={panelWidth.widthPx}
           />
         ) : null}

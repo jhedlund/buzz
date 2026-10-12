@@ -196,17 +196,24 @@ test.describe("thread titles", () => {
     // The thread opens beside the list; the Threads view stays put.
     await rows.first().click();
     const sidePanel = page.getByTestId("message-thread-panel");
-    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
-      "Release checklist",
-    );
+    await expect(
+      sidePanel.getByTestId("message-thread-open-channel"),
+    ).toHaveText(`Release checklist · #${CHANNEL_NAME}`);
     await expect(page.getByTestId("threads-view")).toBeVisible();
     await expect(rows.first()).toHaveAttribute("data-selected", "true");
 
-    // The pane's channel header still jumps into the channel.
-    await sidePanel
-      .getByRole("button", { name: `Open #${CHANNEL_NAME}` })
-      .click();
+    // Like the Inbox header, the title is a link, not an editor: it opens
+    // the thread in its channel, where it can still be renamed.
+    await expect(sidePanel.getByTestId("thread-title-edit")).toHaveCount(0);
+    await sidePanel.getByRole("button", { name: "Open full thread" }).click();
     await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL_NAME);
+    await expect(page.getByTestId("threads-view")).toHaveCount(0);
+    await expect(
+      page.getByTestId("message-thread-panel").getByTestId("thread-title"),
+    ).toHaveText("Release checklist");
+    await expect(
+      page.getByTestId("message-thread-panel").getByTestId("thread-title-edit"),
+    ).toHaveCount(1);
   });
 
   test("clearing the title removes the thread from the Threads view", async ({
@@ -267,8 +274,10 @@ test.describe("thread titles", () => {
     // Opening the thread reads it, which clears both indicators.
     await row.click();
     await expect(
-      page.getByTestId("message-thread-panel").getByTestId("thread-title"),
-    ).toHaveText("Unread tracking");
+      page
+        .getByTestId("message-thread-panel")
+        .getByTestId("message-thread-open-channel"),
+    ).toHaveText(`Unread tracking · #${CHANNEL_NAME}`);
     await expect(page.getByTestId("threads-unread-dot")).toHaveCount(0);
     await page.getByTestId("open-threads-view").click();
     await expect(row).not.toHaveAttribute("data-unread", "true");
@@ -463,8 +472,8 @@ test.describe("thread titles", () => {
 
     // Focus opens the large drawer over the list, which goes inert.
     const drawer = page.getByTestId("focus-thread-drawer");
-    await expect(drawer.getByTestId("thread-title")).toHaveText(
-      "Focus drawer thread",
+    await expect(drawer.getByTestId("message-thread-open-channel")).toHaveText(
+      `Focus drawer thread · #${CHANNEL_NAME}`,
     );
     await expect(page.getByTestId("threads-view")).toBeVisible();
     await expect(
@@ -485,9 +494,9 @@ test.describe("thread titles", () => {
     await drawer.getByTestId("thread-view-mode-toggle").click();
     await expect(drawer).toHaveCount(0);
     const sidePanel = page.getByTestId("message-thread-panel");
-    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
-      "Focus drawer thread",
-    );
+    await expect(
+      sidePanel.getByTestId("message-thread-open-channel"),
+    ).toHaveText(`Focus drawer thread · #${CHANNEL_NAME}`);
     await expect(
       page.locator("[inert]").getByTestId("threads-view"),
     ).toHaveCount(0);
@@ -499,8 +508,8 @@ test.describe("thread titles", () => {
 
     // And back to Focus from the side pane.
     await sidePanel.getByTestId("thread-view-mode-toggle").click();
-    await expect(drawer.getByTestId("thread-title")).toHaveText(
-      "Focus drawer thread",
+    await expect(drawer.getByTestId("message-thread-open-channel")).toHaveText(
+      `Focus drawer thread · #${CHANNEL_NAME}`,
     );
   });
 
@@ -522,8 +531,8 @@ test.describe("thread titles", () => {
 
     // Focus: the drawer covers the list, but not the sidebar.
     await row.click();
-    await expect(drawer.getByTestId("thread-title")).toHaveText(
-      "Sidebar reset thread",
+    await expect(drawer.getByTestId("message-thread-open-channel")).toHaveText(
+      `Sidebar reset thread · #${CHANNEL_NAME}`,
     );
     await page.getByTestId("open-threads-view").click();
     await expect(drawer).toHaveCount(0);
@@ -535,17 +544,17 @@ test.describe("thread titles", () => {
     await row.click();
     await drawer.getByTestId("thread-view-mode-toggle").click();
     const sidePanel = page.getByTestId("message-thread-panel");
-    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
-      "Sidebar reset thread",
-    );
+    await expect(
+      sidePanel.getByTestId("message-thread-open-channel"),
+    ).toHaveText(`Sidebar reset thread · #${CHANNEL_NAME}`);
     await page.getByTestId("open-threads-view").click();
     await expect(sidePanel).toHaveCount(0);
     await expect(row).not.toHaveAttribute("data-selected", "true");
 
     // A reopen still works after a reset.
     await row.click();
-    await expect(sidePanel.getByTestId("thread-title")).toHaveText(
-      "Sidebar reset thread",
-    );
+    await expect(
+      sidePanel.getByTestId("message-thread-open-channel"),
+    ).toHaveText(`Sidebar reset thread · #${CHANNEL_NAME}`);
   });
 });
