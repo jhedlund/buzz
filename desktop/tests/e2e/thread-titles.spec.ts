@@ -216,6 +216,91 @@ test.describe("thread titles", () => {
     ).toHaveCount(1);
   });
 
+  test("own messages can be edited and deleted from the Threads view", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    const rootId = await openThread(page, "Root of a thread to tidy up.");
+    await nameOpenThread(page, "Tidy up");
+    const [editId, deleteId] = await page.evaluate(
+      ({ channelName, parentEventId, pubkey }) =>
+        ["My reply before editing.", "My reply to delete."].map(
+          (content) =>
+            (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+              channelName,
+              content,
+              parentEventId,
+              pubkey,
+            })?.id ?? null,
+        ),
+      {
+        channelName: CHANNEL_NAME,
+        parentEventId: rootId,
+        pubkey: MOCK_IDENTITY_PUBKEY,
+      },
+    );
+    expect(editId).not.toBeNull();
+    expect(deleteId).not.toBeNull();
+
+    await page.getByTestId("open-threads-view").click();
+    await page.getByTestId("threads-view-row").first().click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toContainText("My reply to delete.");
+
+    const openMoreActions = async (messageId: string) => {
+      await panel.locator(`[data-message-id="${messageId}"]`).hover();
+      await page.getByTestId(`more-actions-${messageId}`).click();
+      await expect(page.locator('[role="menuitem"]').first()).toBeVisible();
+    };
+
+    // Someone else's reply gets neither action.
+    const foreignReplyId = await panel
+      .locator("[data-message-id]")
+      .filter({ hasText: "First reply." })
+      .last()
+      .getAttribute("data-message-id");
+    await openMoreActions(foreignReplyId as string);
+    await expect(
+      page.getByTestId(`delete-message-${foreignReplyId}`),
+    ).toHaveCount(0);
+    await expect(
+      page.getByTestId(`edit-message-${foreignReplyId}`),
+    ).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    await openMoreActions(editId as string);
+    await page.getByTestId(`edit-message-${editId}`).click();
+    await expect(panel.getByTestId("edit-target")).toBeVisible();
+    await panel.getByTestId("message-input").click();
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.type("My reply after editing.");
+    await page.keyboard.press("Enter");
+    await expect(panel.getByTestId("edit-target")).toBeHidden();
+    await expect(panel.locator(`[data-message-id="${editId}"]`)).toContainText(
+      "My reply after editing.",
+    );
+
+    await openMoreActions(deleteId as string);
+    await page.getByTestId(`delete-message-${deleteId}`).click();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Delete" })
+      .click();
+    await expect(panel).not.toContainText("My reply to delete.");
+    await expect(page.getByTestId("threads-view")).toBeVisible();
+
+    // Deleting the root leaves nothing to show, so the pane closes.
+    await openMoreActions(rootId);
+    await page.getByTestId(`delete-message-${rootId}`).click();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Delete" })
+      .click();
+    await expect(panel).toHaveCount(0);
+    await expect(page.getByTestId("threads-view")).toBeVisible();
+  });
+
   test("clearing the title removes the thread from the Threads view", async ({
     page,
   }) => {

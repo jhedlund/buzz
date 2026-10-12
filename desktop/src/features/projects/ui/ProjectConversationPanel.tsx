@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 
+import { useAppShell } from "@/app/AppShellContext";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import {
   useChannelMembersQuery,
@@ -11,12 +12,18 @@ import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import {
   useChannelSubscription,
+  useDeleteMessageMutation,
+  useEditMessageMutation,
   useSendMessageMutation,
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
+import { buildMessageComposerEditTarget } from "@/features/messages/lib/draftMentionRefs";
+import { getSendToChannelSemantics } from "@/features/messages/lib/sendToChannelSemantics";
+import { summarizeThreadRoot } from "@/features/messages/lib/sentFromThread";
 import { getThreadReference } from "@/features/messages/lib/threading";
 import { useIndependentThreadPanel } from "@/features/messages/useIndependentThreadPanel";
 import { useThreadReplies } from "@/features/messages/useThreadReplies";
+import { DeleteMessageConfirmDialog } from "@/features/messages/ui/DeleteMessageConfirmDialog";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageThreadPanelSkeleton } from "@/features/messages/ui/MessageThreadPanelSkeleton";
 import type { TimelineMessage } from "@/features/messages/types";
@@ -148,6 +155,8 @@ export function ProjectConversationPanel({
   const [scrollTargetId, setScrollTargetId] = React.useState<string | null>(
     hit.eventId === rootId ? null : hit.eventId,
   );
+  const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
+  const [emptyDeleteId, setEmptyDeleteId] = React.useState<string | null>(null);
   const threadIdentity = `${hit.eventId}:${rootId ?? ""}`;
   const threadIdentityRef = React.useRef(threadIdentity);
   if (threadIdentityRef.current !== threadIdentity) {
@@ -156,6 +165,8 @@ export function ProjectConversationPanel({
     setExpandedReplyIds(new Set());
     setReplyTargetId(rootId);
     setScrollTargetId(hit.eventId === rootId ? null : hit.eventId);
+    setEditTargetId(null);
+    setEmptyDeleteId(null);
   }
   if (
     expansionKey &&
@@ -188,11 +199,88 @@ export function ProjectConversationPanel({
     identityQuery.data,
   );
   const toggleReactionMutation = useToggleReactionMutation();
+  const deleteMessageMutation = useDeleteMessageMutation(activeChannel);
+  const editMessageMutation = useEditMessageMutation(activeChannel);
+  const { followThread, isNotifiedForThread, unfollowThread } = useAppShell();
   const isOverlay = useIsThreadPanelOverlay();
   const isComposerDisabled =
     !activeChannel?.isMember ||
     activeChannel.archivedAt !== null ||
     activeChannel.channelType === "forum";
+  const canManageMessages = Boolean(activeChannel && !activeChannel.archivedAt);
+  const editTargetMessage = editTargetId
+    ? (panelData.messages.find((message) => message.id === editTargetId) ??
+      null)
+    : null;
+  const editTarget = editTargetMessage
+    ? buildMessageComposerEditTarget(
+        editTargetMessage,
+        profiles,
+        (pubkey) => !!profiles?.[pubkey]?.isAgent,
+      )
+    : null;
+  const deleteMessage = React.useCallback(
+    async (message: { id: string }) => {
+      try {
+        await deleteMessageMutation.mutateAsync({ eventId: message.id });
+      } catch {
+        // Failure is surfaced via the mutation's onError toast.
+        return;
+      }
+      // The root is loaded on its own, outside the replies cache, so a
+      // deleted root would linger; there is no thread left to show.
+      if (message.id === rootId) onClose();
+    },
+    [deleteMessageMutation.mutateAsync, onClose, rootId],
+  );
+  const handleEdit = React.useCallback((message: { id: string }) => {
+    setEditTargetId((current) => (current === message.id ? null : message.id));
+  }, []);
+  const handleEditSave = React.useCallback(
+    async (
+      content: string,
+      mediaTags?: string[][],
+      mentionPubkeys?: string[],
+    ) => {
+      if (!editTargetId) return;
+      // Clearing an edit to empty means "Delete message", behind the same
+      // confirmation the menu's Delete shows (as in the channel view).
+      if (content.trim().length === 0 && !mediaTags?.length) {
+        setEmptyDeleteId(editTargetId);
+        return;
+      }
+      await editMessageMutation.mutateAsync({
+        eventId: editTargetId,
+        content,
+        mediaTags,
+        mentionPubkeys,
+      });
+      setEditTargetId((current) => (current === editTargetId ? null : current));
+    },
+    [editMessageMutation.mutateAsync, editTargetId],
+  );
+  const handleSendToChannel = React.useCallback(
+    async (
+      message: TimelineMessage,
+      threadRoot: TimelineMessage,
+      targetChannelId: string,
+    ) => {
+      const { mentionPubkeys, semanticTags } = getSendToChannelSemantics(
+        message,
+        profiles,
+      );
+      await sendMessageMutation.mutateAsync({
+        channelId: targetChannelId,
+        content: message.body,
+        mediaTags: semanticTags,
+        mentionPubkeys,
+        sentFromThreadRootExcerpt: summarizeThreadRoot(threadRoot.body),
+        sentFromThreadRootId: threadRoot.id,
+      });
+    },
+    [profiles, sendMessageMutation.mutateAsync],
+  );
+  const isFollowingThread = rootId ? isNotifiedForThread(rootId) : false;
   const canShowThread =
     Boolean(activeChannel && panelData.threadHead) &&
     (expansionKey == null ||
@@ -319,45 +407,77 @@ export function ProjectConversationPanel({
 
   if (canShowThread && activeChannel && panelData.threadHead) {
     return wrapProjectConversationPane(
-      <MessageThreadPanel
-        {...layoutProps}
-        activityAccessoryVisible={false}
-        channel={activeChannel}
-        channelId={activeChannel.id}
-        channelName={activeChannel.name}
-        currentPubkey={identityQuery.data?.pubkey}
-        disabled={isComposerDisabled}
-        isSending={sendMessageMutation.isPending}
-        onCancelReply={() => setReplyTargetId(rootId)}
-        onClose={onClose}
-        onExpandReplies={handleExpandReplies}
-        onScrollTargetResolved={() => setScrollTargetId(null)}
-        onSelectReplyTarget={(message) => setReplyTargetId(message.id)}
-        onSend={handleSend}
-        onToggleReaction={
-          isComposerDisabled
-            ? undefined
-            : async (message, emoji, remove) => {
-                await toggleReactionMutation.mutateAsync({
-                  emoji,
-                  eventId: message.id,
-                  remove,
-                });
-              }
-        }
-        profiles={profiles}
-        replyTargetMessage={panelData.replyTargetMessage}
-        scrollTargetId={scrollTargetId}
-        threadHead={panelData.threadHead}
-        threadReplies={panelData.visibleReplies}
-        threadRepliesPending={threadRepliesQuery.isPending}
-        threadRepliesError={threadRepliesQuery.isError}
-        onRetryThreadReplies={() => {
-          void threadRepliesQuery.refetch();
-        }}
-        threadTypingPubkeys={[]}
-        widthPx={widthPx}
-      />,
+      <>
+        <MessageThreadPanel
+          {...layoutProps}
+          activityAccessoryVisible={false}
+          channel={activeChannel}
+          channelId={activeChannel.id}
+          channelName={activeChannel.name}
+          currentPubkey={identityQuery.data?.pubkey}
+          disabled={isComposerDisabled}
+          editTarget={editTarget}
+          isFollowingThread={isFollowingThread}
+          isSending={sendMessageMutation.isPending}
+          onCancelEdit={() => setEditTargetId(null)}
+          onCancelReply={() => setReplyTargetId(rootId)}
+          onClose={onClose}
+          onDelete={canManageMessages ? deleteMessage : undefined}
+          onEdit={canManageMessages ? handleEdit : undefined}
+          onEditSave={canManageMessages ? handleEditSave : undefined}
+          onExpandReplies={handleExpandReplies}
+          onFollowThread={
+            rootId && !isFollowingThread
+              ? () => followThread(rootId)
+              : undefined
+          }
+          onUnfollowThread={
+            rootId && isFollowingThread
+              ? () => unfollowThread(rootId)
+              : undefined
+          }
+          onSendToChannel={isComposerDisabled ? undefined : handleSendToChannel}
+          onScrollTargetResolved={() => setScrollTargetId(null)}
+          onSelectReplyTarget={(message) => setReplyTargetId(message.id)}
+          onSend={handleSend}
+          onToggleReaction={
+            isComposerDisabled
+              ? undefined
+              : async (message, emoji, remove) => {
+                  await toggleReactionMutation.mutateAsync({
+                    emoji,
+                    eventId: message.id,
+                    remove,
+                  });
+                }
+          }
+          profiles={profiles}
+          replyTargetMessage={panelData.replyTargetMessage}
+          scrollTargetId={scrollTargetId}
+          threadHead={panelData.threadHead}
+          threadReplies={panelData.visibleReplies}
+          threadRepliesPending={threadRepliesQuery.isPending}
+          threadRepliesError={threadRepliesQuery.isError}
+          onRetryThreadReplies={() => {
+            void threadRepliesQuery.refetch();
+          }}
+          threadTypingPubkeys={[]}
+          widthPx={widthPx}
+        />
+        <DeleteMessageConfirmDialog
+          onConfirm={() => {
+            if (emptyDeleteId) {
+              setEditTargetId(null);
+              void deleteMessage({ id: emptyDeleteId });
+            }
+            setEmptyDeleteId(null);
+          }}
+          onOpenChange={(open) => {
+            if (!open) setEmptyDeleteId(null);
+          }}
+          open={emptyDeleteId !== null}
+        />
+      </>,
       paneOptions,
     );
   }
