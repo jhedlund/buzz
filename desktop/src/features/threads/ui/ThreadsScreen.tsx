@@ -6,19 +6,19 @@ import * as React from "react";
 import { useAppShell } from "@/app/AppShellContext";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useChannelsQuery } from "@/features/channels/hooks";
-import {
-  type ThreadViewMode,
-  setThreadViewMode,
-  useThreadViewMode,
-} from "@/features/channels/lib/threadViewModePreference";
+import { useThreadViewMode } from "@/features/channels/lib/threadViewModePreference";
 import {
   mergeOpenChannelDirectory,
   useOpenChannelDirectoryQuery,
 } from "@/features/channels/openChannelDirectory";
-import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
 import { useFocusDrawerPresence } from "@/features/channels/ui/useFocusDrawerPresence";
 import { formatRelativeTime } from "@/features/forum/lib/time";
-import { ProjectConversationPanel } from "@/features/projects/ui/ProjectConversationPanel";
+import { getThreadReference } from "@/features/messages/lib/threading";
+import type { TimelineMessage } from "@/features/messages/types";
+import {
+  type ConversationUnread,
+  ProjectConversationPanel,
+} from "@/features/projects/ui/ProjectConversationPanel";
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import {
   useMarkOpenThreadRead,
@@ -30,6 +30,7 @@ import {
   filterByChannel,
   threadChannelOptions,
 } from "@/features/threads/lib/threadChannelFilter";
+import { unreadReplyIdsForRoot } from "@/features/threads/lib/threadPaneUnread";
 import { partitionByPin } from "@/features/threads/lib/threadPins";
 import { useThreadPins } from "@/features/threads/lib/useThreadPins";
 import { ThreadsChannelFilterMenu } from "@/features/threads/ui/ThreadsChannelFilterMenu";
@@ -48,7 +49,13 @@ const CHANNEL_FILTER_SESSION_KEY = "buzz.desktop.threads-channel-filter";
 
 const FOCUS_DRAWER = { backLabel: "Back to Threads" };
 
-type OpenThread = { channelId: string; channelName: string; rootId: string };
+type OpenThread = {
+  channelId: string;
+  channelName: string;
+  rootId: string;
+  /** Replies unread as the thread opened, before the pane reads them. */
+  unreadAtOpen: ReadonlySet<string>;
+};
 
 function readSessionFilter(): string | null {
   try {
@@ -313,7 +320,16 @@ export function ThreadsScreen() {
   const panelWidth = useThreadPanelWidth();
   const [openThread, setOpenThread] = React.useState<OpenThread | null>(null);
   const [selectedFilter, setSelectedFilter] = React.useState(readSessionFilter);
-  const { feedItemState } = useAppShell();
+  const { feedItemState, markMessageRead, unreadThreadFeedItems } =
+    useAppShell();
+  const unreadFeedReplies = React.useMemo(
+    () =>
+      unreadThreadFeedItems.map((item) => ({
+        id: item.id,
+        rootId: getThreadReference(item.tags).rootId,
+      })),
+    [unreadThreadFeedItems],
+  );
   // After "Mark unread" the open thread stops reading itself, or the replies
   // would be read again at once; opening any thread (or closing) resumes it.
   const [heldUnreadThread, setHeldUnreadThread] =
@@ -327,6 +343,36 @@ export function ThreadsScreen() {
       setHeldUnreadThread(openThread);
     },
     [feedItemState.markUnread, openThread],
+  );
+  const openRootId = openThread?.rootId ?? null;
+  const currentUnread = React.useMemo(
+    () => unreadReplyIdsForRoot(unreadFeedReplies, openRootId),
+    [openRootId, unreadFeedReplies],
+  );
+  const markOpenRepliesRead = React.useCallback(
+    (replies: TimelineMessage[]) => {
+      for (const reply of replies) {
+        feedItemState.undoUnread(reply.id);
+        markMessageRead(reply.id, reply.createdAt);
+      }
+      // Once nothing marked unread is left, the open thread reads itself again.
+      if ([...currentUnread].every((id) => replies.some((r) => r.id === id))) {
+        setHeldUnreadThread(null);
+      }
+    },
+    [currentUnread, feedItemState.undoUnread, markMessageRead],
+  );
+  const unreadAtOpen = openThread?.unreadAtOpen;
+  const paneUnread = React.useMemo<ConversationUnread | undefined>(
+    () =>
+      unreadAtOpen
+        ? {
+            atOpen: unreadAtOpen,
+            current: currentUnread,
+            onMarkRead: markOpenRepliesRead,
+          }
+        : undefined,
+    [currentUnread, markOpenRepliesRead, unreadAtOpen],
   );
 
   // Threads follow the channel thread layout preference: Focus opens the
@@ -350,14 +396,6 @@ export function ThreadsScreen() {
     lastResetIdRef.current = threadsResetId;
     closeThread();
   }, [closeThread, threadsResetId]);
-  const changeThreadViewMode = React.useCallback(
-    (mode: ThreadViewMode) => {
-      setThreadViewMode(mode);
-      // Switching layouts swaps the drawer out without an exit animation.
-      markExitComplete();
-    },
-    [markExitComplete],
-  );
 
   // Titles also come from open channels the user hasn't joined; only then pay
   // for the all-open directory scan (React Query dedups it across surfaces).
@@ -418,9 +456,10 @@ export function ThreadsScreen() {
         channelId: joined.id,
         channelName: joined.name,
         rootId: entry.rootId,
+        unreadAtOpen: unreadReplyIdsForRoot(unreadFeedReplies, entry.rootId),
       });
     },
-    [channelsQuery.data, goChannel, goForumPost],
+    [channelsQuery.data, goChannel, goForumPost, unreadFeedReplies],
   );
 
   return (
@@ -475,11 +514,6 @@ export function ThreadsScreen() {
           <ProjectConversationPanel
             canResetWidth={panelWidth.canReset}
             focusDrawer={useFocusDrawer ? FOCUS_DRAWER : undefined}
-            headerLeading={
-              isOverlay ? undefined : (
-                <ThreadViewModeToggle onChange={changeThreadViewMode} />
-              )
-            }
             hit={{
               channelId: openThread.channelId,
               channelName: openThread.channelName,
@@ -491,7 +525,10 @@ export function ThreadsScreen() {
             onMarkUnread={markOpenThreadUnread}
             onResetWidth={panelWidth.onResetWidth}
             onResizeStart={panelWidth.onResizeStart}
+            // Switching layouts swaps the drawer out without an exit animation.
+            onThreadViewModeChange={markExitComplete}
             titleOpensThread
+            unread={paneUnread}
             widthPx={panelWidth.widthPx}
           />
         ) : null}

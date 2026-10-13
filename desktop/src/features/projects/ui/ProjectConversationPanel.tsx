@@ -8,12 +8,12 @@ import {
   useChannelsQuery,
 } from "@/features/channels/hooks";
 import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout";
+import type { ThreadViewMode } from "@/features/channels/lib/threadViewModePreference";
+import { BotActivityComposerAction } from "@/features/channels/ui/BotActivityBar";
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
-import {
-  buildDirectReplyIdsByParentId,
-  collectReplyDescendantIds,
-} from "@/features/channels/lib/subtreeCreatedAt";
+import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
+import { useThreadViewModeSwitch } from "@/features/channels/ui/useThreadViewModeSwitch";
 import {
   useChannelSubscription,
   useDeleteMessageMutation,
@@ -22,6 +22,7 @@ import {
   useToggleReactionMutation,
 } from "@/features/messages/hooks";
 import { buildMessageComposerEditTarget } from "@/features/messages/lib/draftMentionRefs";
+import { getRecentMentionPubkeys } from "@/features/messages/lib/recentMentionPubkeys";
 import { getSendToChannelSemantics } from "@/features/messages/lib/sendToChannelSemantics";
 import { summarizeThreadRoot } from "@/features/messages/lib/sentFromThread";
 import { getThreadReference } from "@/features/messages/lib/threading";
@@ -32,7 +33,13 @@ import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageThreadPanelSkeleton } from "@/features/messages/ui/MessageThreadPanelSkeleton";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useProfileQuery, useUsersBatchQuery } from "@/features/profile/hooks";
+import { useConversationPanelActivity } from "@/features/projects/ui/useConversationPanelActivity";
 import { useThreadTitle } from "@/features/threads/hooks";
+import {
+  firstUnreadReplyId,
+  subtreeReplies,
+  unreadDescendantCounts,
+} from "@/features/threads/lib/threadPaneUnread";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import type { SearchHit } from "@/shared/api/searchTypes";
 import { getEventById } from "@/shared/api/tauri";
@@ -60,6 +67,16 @@ export type ConversationFocusDrawer = {
   backLabel: string;
 };
 
+/** Thread unread state from the surface that opened the pane. */
+export type ConversationUnread = {
+  /** Replies unread when the thread opened; anchors the "New" divider. */
+  atOpen: ReadonlySet<string>;
+  /** Replies unread right now; drives the badges and the menu's toggle. */
+  current: ReadonlySet<string>;
+  /** Receives the replies a "Mark read" covers. */
+  onMarkRead: (replies: TimelineMessage[]) => void;
+};
+
 /** Channel thread shown beside project details and the Threads view. */
 export function ProjectConversationPanel({
   canResetWidth,
@@ -70,8 +87,10 @@ export function ProjectConversationPanel({
   onMarkUnread,
   onResetWidth,
   onResizeStart,
+  onThreadViewModeChange,
   sharedHeaderBackdrop,
   titleOpensThread = false,
+  unread,
   widthPx,
 }: {
   canResetWidth: boolean;
@@ -87,12 +106,19 @@ export function ProjectConversationPanel({
   onMarkUnread?: (replyIds: string[]) => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
+  /**
+   * Shows the Focus/Split toggle in the header (replacing `headerLeading`)
+   * and keeps the reply being read in view across the switch, as channels do.
+   * Called after the preference changes.
+   */
+  onThreadViewModeChange?: (mode: ThreadViewMode) => void;
   sharedHeaderBackdrop?: boolean;
   /**
    * The header shows the thread's title and opens the thread in its channel,
    * like the Inbox header, instead of linking the channel with an editor.
    */
   titleOpensThread?: boolean;
+  unread?: ConversationUnread;
   widthPx: number;
 }) {
   const { goChannel } = useAppNavigation();
@@ -165,6 +191,10 @@ export function ProjectConversationPanel({
   );
   const [scrollTargetId, setScrollTargetId] = React.useState<string | null>(
     hit.eventId === rootId ? null : hit.eventId,
+  );
+  const clearScrollTarget = React.useCallback(
+    () => setScrollTargetId(null),
+    [],
   );
   const [editTargetId, setEditTargetId] = React.useState<string | null>(null);
   const [emptyDeleteId, setEmptyDeleteId] = React.useState<string | null>(null);
@@ -317,16 +347,92 @@ export function ProjectConversationPanel({
   const handleMarkUnread = React.useCallback(
     (message: TimelineMessage) => {
       if (!onMarkUnread) return;
-      const descendantIds = collectReplyDescendantIds(
-        message.id,
-        buildDirectReplyIdsByParentId(panelData.messages),
-      );
       onMarkUnread(
-        message.id === rootId ? descendantIds : [message.id, ...descendantIds],
+        subtreeReplies(message.id, rootId, panelData.messages).map(
+          (reply) => reply.id,
+        ),
       );
     },
     [onMarkUnread, panelData.messages, rootId],
   );
+  const onMarkRead = unread?.onMarkRead;
+  const handleMarkRead = React.useCallback(
+    (message: TimelineMessage) => {
+      onMarkRead?.(subtreeReplies(message.id, rootId, panelData.messages));
+    },
+    [onMarkRead, panelData.messages, rootId],
+  );
+  const unreadMarkers = React.useMemo(() => {
+    if (!unread) return null;
+    const replies = panelData.messages.filter(
+      (message) => message.id !== rootId,
+    );
+    return {
+      firstUnreadReplyId: firstUnreadReplyId(
+        panelData.visibleReplies.map((entry) => entry.message),
+        unread.atOpen,
+        currentPubkey,
+      ),
+      threadUnreadCount: replies.filter((reply) => unread.current.has(reply.id))
+        .length,
+      threadReplyUnreadCounts: unreadDescendantCounts(
+        panelData.messages,
+        unread.current,
+      ),
+    };
+  }, [
+    currentPubkey,
+    panelData.messages,
+    panelData.visibleReplies,
+    rootId,
+    unread,
+  ]);
+  const unreadCurrent = unread?.current;
+  const isMessageUnreadById = React.useCallback(
+    (messageId: string) => unreadCurrent?.has(messageId) ?? false,
+    [unreadCurrent],
+  );
+  const recentMentionPubkeys = React.useMemo(
+    () =>
+      getRecentMentionPubkeys(
+        [...panelData.messages].sort((a, b) => a.createdAt - b.createdAt),
+        activeChannel?.channelType,
+      ),
+    [activeChannel?.channelType, panelData.messages],
+  );
+  const conversationEvents = React.useMemo(
+    () => (rootEvent ? [rootEvent, ...threadReplyEvents] : threadReplyEvents),
+    [rootEvent, threadReplyEvents],
+  );
+  const activity = useConversationPanelActivity({
+    activeChannel,
+    channelMembers: membersQuery.data,
+    currentPubkey,
+    events: conversationEvents,
+    rootId,
+  });
+  const openAgentSession = React.useCallback(
+    (pubkey: string, sessionChannelId?: string | null) => {
+      const targetChannelId = sessionChannelId ?? channelId;
+      if (targetChannelId) {
+        void goChannel(targetChannelId, { agentSession: pubkey });
+      }
+    },
+    [channelId, goChannel],
+  );
+  const { changeThreadViewMode, layoutScrollTargetId, resolveScrollTarget } =
+    useThreadViewModeSwitch({
+      activeThreadHeadId: rootId,
+      externalScrollTargetId: scrollTargetId,
+      onExternalTargetResolved: clearScrollTarget,
+      onModeChange: onThreadViewModeChange,
+    });
+  const panelHeaderLeading =
+    onThreadViewModeChange && !isOverlay ? (
+      <ThreadViewModeToggle onChange={changeThreadViewMode} />
+    ) : (
+      headerLeading
+    );
   const isFollowingThread = rootId ? isNotifiedForThread(rootId) : false;
   const canShowThread =
     Boolean(activeChannel && panelData.threadHead) &&
@@ -370,7 +476,7 @@ export function ProjectConversationPanel({
   const layoutProps = {
     canResetWidth,
     enterMotion: !canShowThread,
-    headerLeading,
+    headerLeading: panelHeaderLeading,
     ...(titleOpensThread
       ? {
           headerTitle: threadLinkTitle,
@@ -397,7 +503,7 @@ export function ProjectConversationPanel({
     transparentChrome: sharedHeaderBackdrop,
     ...(activeFocusDrawer
       ? getThreadPanelLayout({
-          headerLeading,
+          headerLeading: panelHeaderLeading,
           isFocusDrawer: true,
           isSinglePanelView: true,
           useSplitAuxiliaryPane: true,
@@ -457,14 +563,29 @@ export function ProjectConversationPanel({
       <>
         <MessageThreadPanel
           {...layoutProps}
-          activityAccessoryVisible={false}
+          activityAccessoryContent={
+            activity.workingAgentPubkeys.length > 0 ? (
+              <BotActivityComposerAction
+                agents={activity.agents}
+                channelId={activeChannel.id}
+                onOpenAgentSession={openAgentSession}
+                openAgentSessionPubkey={null}
+                profiles={profiles}
+                variant="inline"
+                workingBotPubkeys={activity.workingAgentPubkeys}
+              />
+            ) : null
+          }
+          activityAccessoryVisible={activity.workingAgentPubkeys.length > 0}
           channel={activeChannel}
           channelId={activeChannel.id}
           channelName={activeChannel.name}
           currentPubkey={identityQuery.data?.pubkey}
           disabled={isComposerDisabled}
           editTarget={editTarget}
+          firstUnreadReplyId={unreadMarkers?.firstUnreadReplyId}
           isFollowingThread={isFollowingThread}
+          isMessageUnreadById={unread ? isMessageUnreadById : undefined}
           isSending={sendMessageMutation.isPending}
           onCancelEdit={() => setEditTargetId(null)}
           onCancelReply={() => setReplyTargetId(rootId)}
@@ -476,6 +597,7 @@ export function ProjectConversationPanel({
             canManageMessages ? handleEditLastOwnMessage : undefined
           }
           onExpandReplies={handleExpandReplies}
+          onMarkRead={unread ? handleMarkRead : undefined}
           onMarkUnread={onMarkUnread ? handleMarkUnread : undefined}
           onFollowThread={
             rootId && !isFollowingThread
@@ -488,7 +610,8 @@ export function ProjectConversationPanel({
               : undefined
           }
           onSendToChannel={isComposerDisabled ? undefined : handleSendToChannel}
-          onScrollTargetResolved={() => setScrollTargetId(null)}
+          onScrollTargetResolved={() => resolveScrollTarget()}
+          onScrollTargetSettled={resolveScrollTarget}
           onSelectReplyTarget={(message) => setReplyTargetId(message.id)}
           onSend={handleSend}
           onToggleReaction={
@@ -503,8 +626,10 @@ export function ProjectConversationPanel({
                 }
           }
           profiles={profiles}
+          recentMentionPubkeys={recentMentionPubkeys}
           replyTargetMessage={panelData.replyTargetMessage}
-          scrollTargetId={scrollTargetId}
+          scrollTargetHighlights={!layoutScrollTargetId}
+          scrollTargetId={layoutScrollTargetId ?? scrollTargetId}
           threadHead={panelData.threadHead}
           threadReplies={panelData.visibleReplies}
           threadRepliesPending={threadRepliesQuery.isPending}
@@ -512,7 +637,9 @@ export function ProjectConversationPanel({
           onRetryThreadReplies={() => {
             void threadRepliesQuery.refetch();
           }}
-          threadTypingPubkeys={[]}
+          threadReplyUnreadCounts={unreadMarkers?.threadReplyUnreadCounts}
+          threadTypingPubkeys={activity.threadTypingPubkeys}
+          threadUnreadCount={unreadMarkers?.threadUnreadCount}
           widthPx={widthPx}
         />
         <DeleteMessageConfirmDialog

@@ -143,7 +143,12 @@ function ThreadsMenuItem({
         <SidebarMenuLabel>Threads</SidebarMenuLabel>
         {hasUnread ? (
           <span
-            className="ml-auto h-2 w-2 shrink-0 rounded-full bg-primary"
+            // On the selected row's primary fill a primary dot vanishes, and
+            // that is exactly when a thread pane covers the list.
+            className={cn(
+              "ml-auto h-2 w-2 shrink-0 rounded-full",
+              isActive ? "bg-sidebar-active-foreground" : "bg-primary",
+            )}
             data-testid="threads-unread-dot"
           >
             <span className="sr-only">unread</span>

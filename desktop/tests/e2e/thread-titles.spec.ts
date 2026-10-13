@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 
-import { installMockBridge } from "../helpers/bridge";
+import { installMockBridge, TEST_IDENTITIES } from "../helpers/bridge";
 
 type MockMessageWindow = Window & {
   __BUZZ_E2E_EMIT_MOCK_MESSAGE__?: (input: {
@@ -14,6 +14,11 @@ type MockMessageWindow = Window & {
     channelName: string;
     kind?: number;
   }) => boolean;
+  __BUZZ_E2E_EMIT_MOCK_TYPING__?: (input: {
+    channelName: string;
+    pubkey?: string;
+    threadHeadId?: string;
+  }) => unknown;
   __BUZZ_E2E_SET_REMOTE_THREAD_TITLE__?: (input: {
     channelName: string;
     rootId: string;
@@ -29,10 +34,15 @@ const ALICE_PUBKEY =
 async function openThread(
   page: Page,
   rootContent: string,
-  options: { replyCreatedAt?: number } = {},
+  options: {
+    channelName?: string;
+    replyCreatedAt?: number;
+    replyPubkey?: string;
+  } = {},
 ): Promise<string> {
-  await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
-  await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL_NAME);
+  const channelName = options.channelName ?? CHANNEL_NAME;
+  await page.getByTestId(`channel-${channelName}`).click();
+  await expect(page.getByTestId("chat-title")).toHaveText(channelName);
   await expect
     .poll(() =>
       page.evaluate(
@@ -41,7 +51,7 @@ async function openThread(
             window as MockMessageWindow
           ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName: name }) ??
           false,
-        CHANNEL_NAME,
+        channelName,
       ),
     )
     .toBe(true);
@@ -57,7 +67,7 @@ async function openThread(
         pubkey,
       })?.id ?? null,
     {
-      channelName: CHANNEL_NAME,
+      channelName,
       content: rootContent,
       pubkey: MOCK_IDENTITY_PUBKEY,
     },
@@ -74,10 +84,10 @@ async function openThread(
       });
     },
     {
-      channelName: CHANNEL_NAME,
+      channelName,
       createdAt: options.replyCreatedAt,
       parentEventId: rootId,
-      pubkey: ALICE_PUBKEY,
+      pubkey: options.replyPubkey ?? ALICE_PUBKEY,
     },
   );
   // A new root collapses its reply into a summary row as it renders, so a
@@ -104,6 +114,23 @@ async function emitReply(page: Page, parentEventId: string, content: string) {
     },
     { channelName: CHANNEL_NAME, content, parentEventId, pubkey: ALICE_PUBKEY },
   );
+}
+
+async function openReplyMenu(page: Page, content: string) {
+  const panel = page.getByTestId("message-thread-panel");
+  const replyId = await panel
+    .locator("[data-message-id]")
+    .filter({ hasText: content })
+    .last()
+    .getAttribute("data-message-id");
+  const toggle = page.getByTestId(`mark-read-toggle-${replyId}`);
+  // A click while the previous menu is still closing can be swallowed.
+  await expect(async () => {
+    await panel.locator(`[data-message-id="${replyId}"]`).hover();
+    await page.getByTestId(`more-actions-${replyId}`).click();
+    await expect(toggle).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+  return toggle;
 }
 
 async function nameOpenThread(page: Page, title: string) {
@@ -455,6 +482,168 @@ test.describe("thread titles", () => {
     await expect(panel).toContainText("A reply to come back to.");
     await expect(row).not.toHaveAttribute("data-unread", "true");
     await expect(page.getByTestId("threads-unread-dot")).toHaveCount(0);
+  });
+
+  test("the Threads view pane marks where the new replies start", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    const rootId = await openThread(page, "Root of a thread with news.");
+    await nameOpenThread(page, "News thread");
+
+    await page.getByTestId("open-threads-view").click();
+    const row = page.getByTestId("threads-view-row");
+    // Until the channel's thread panel unmounts it reads new replies itself.
+    await expect(row).toHaveCount(1);
+    await emitReply(page, rootId, "The first new reply.");
+    await emitReply(page, rootId, "The second new reply.");
+    await expect(page.getByTestId("threads-view-row-unread")).toHaveText(
+      "2 new",
+    );
+
+    // Opening reads the thread, but the divider still marks what was new.
+    await row.click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toContainText("The second new reply.");
+    await expect(row).not.toHaveAttribute("data-unread", "true");
+    const divider = panel.getByTestId("message-unread-divider");
+    await expect(divider).toHaveCount(1);
+    const top = async (text: string) =>
+      (await panel.getByText(text, { exact: true }).boundingBox())?.y ?? 0;
+    const dividerTop = (await divider.boundingBox())?.y ?? 0;
+    expect(dividerTop).toBeGreaterThan(await top("First reply."));
+    expect(dividerTop).toBeLessThan(await top("The first new reply."));
+  });
+
+  test("Mark read in the Threads view pane undoes Mark unread", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    const rootId = await openThread(page, "Root of a thread to read twice.");
+    await nameOpenThread(page, "Read twice");
+    await emitReply(page, rootId, "A reply to flag and unflag.");
+
+    await page.getByTestId("open-threads-view").click();
+    const row = page.getByTestId("threads-view-row");
+    await row.click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toContainText("A reply to flag and unflag.");
+
+    const toggle = await openReplyMenu(page, "A reply to flag and unflag.");
+    await expect(toggle).toHaveText("Mark unread");
+    await toggle.click();
+    await expect(page.getByTestId("threads-view-row-unread")).toHaveText(
+      "1 new",
+    );
+
+    const sameToggle = await openReplyMenu(page, "A reply to flag and unflag.");
+    await expect(sameToggle).toHaveText("Mark read");
+    await sameToggle.click();
+    await expect(row).not.toHaveAttribute("data-unread", "true");
+    await expect(page.getByTestId("threads-unread-dot")).toHaveCount(0);
+
+    // With nothing left marked unread, the open thread reads new replies again.
+    await emitReply(page, rootId, "A reply after reading it all.");
+    await expect(panel).toContainText("A reply after reading it all.");
+    await expect(row).not.toHaveAttribute("data-unread", "true");
+  });
+
+  test("the Threads view pane shows who is typing and which agents are working", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    // Typing right after your own message is suppressed, so the agent must
+    // not be the one who wrote the first reply.
+    const rootId = await openThread(page, "Root of a thread with an agent.", {
+      channelName: "agents",
+      replyPubkey: TEST_IDENTITIES.bob.pubkey,
+    });
+    await nameOpenThread(page, "Agent thread");
+
+    await page.getByTestId("open-threads-view").click();
+    await page.getByTestId("threads-view-row").click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toContainText("Root of a thread with an agent.");
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as MockMessageWindow
+            ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+              channelName: "agents",
+              kind: 20002,
+            }) ?? false,
+        ),
+      )
+      .toBe(true);
+
+    const emitTyping = (pubkey: string) =>
+      page.evaluate(
+        ({ pubkey, threadHeadId }) => {
+          (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_TYPING__?.({
+            channelName: "agents",
+            pubkey,
+            threadHeadId,
+          });
+        },
+        { pubkey, threadHeadId: rootId },
+      );
+    // Alice is an agent in #agents; Charlie is not.
+    await emitTyping(TEST_IDENTITIES.alice.pubkey);
+    await expect(
+      panel.getByTestId("bot-activity-composer-trigger"),
+    ).toBeVisible();
+    await emitTyping(TEST_IDENTITIES.charlie.pubkey);
+    await expect(panel.getByTestId("message-typing-indicator")).toBeVisible();
+  });
+
+  test("the selected Threads item shows its unread dot while a thread is open", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("buzz.channels.threadViewMode", "focus");
+      // A theme whose selected row is filled with the blue accent, where a
+      // primary-colored dot disappears.
+      localStorage.setItem("buzz-theme", "catppuccin-latte");
+      localStorage.setItem("buzz-accent-color", "#3b82f6");
+    });
+    await installMockBridge(page);
+    await page.goto("/");
+    const otherRoot = await openThread(page, "Root of the other thread.");
+    await nameOpenThread(page, "Other thread");
+    await openThread(page, "Root of the thread being read.", {
+      replyCreatedAt: Math.floor(Date.now() / 1000) + 60,
+    });
+    await nameOpenThread(page, "Thread being read");
+    await page.keyboard.press("Escape");
+
+    await page.getByTestId("open-threads-view").click();
+    await page
+      .getByTestId("threads-view-row")
+      .filter({ hasText: "Thread being read" })
+      .click();
+    await expect(page.getByTestId("focus-thread-drawer")).toBeVisible();
+
+    // The drawer covers the other row's "1 new", so the sidebar has to say it.
+    await emitReply(page, otherRoot, "News in the other thread.");
+    const dot = page.getByTestId("threads-unread-dot");
+    await expect(dot).toBeVisible();
+    // Drawn in the selected row's text color, so it shows on any row fill
+    // (a primary dot vanished on the primary-filled selection).
+    const colors = await dot.evaluate((element) => {
+      const button = element.closest("button") as HTMLElement;
+      return {
+        fill: getComputedStyle(button).backgroundColor,
+        text: getComputedStyle(button).color,
+        dot: getComputedStyle(element).backgroundColor,
+      };
+    });
+    expect(colors.dot).toBe(colors.text);
+    expect(colors.dot).not.toBe(colors.fill);
   });
 
   test("a pinned thread stays above more recently active ones", async ({
