@@ -301,6 +301,56 @@ test.describe("thread titles", () => {
     await expect(page.getByTestId("threads-view")).toBeVisible();
   });
 
+  test("ArrowUp in the Threads view composer edits your last message", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    const now = Math.floor(Date.now() / 1000);
+    const rootId = await openThread(page, "Root before my last reply.", {
+      replyCreatedAt: now + 120,
+    });
+    await nameOpenThread(page, "Up to edit");
+    // Newer than the root but older than Alice's reply, so ArrowUp has to
+    // skip someone else's newer message and pick this one over the root.
+    const ownReplyId = await page.evaluate(
+      ({ channelName, createdAt, parentEventId, pubkey }) =>
+        (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+          channelName,
+          content: "My last reply.",
+          createdAt,
+          parentEventId,
+          pubkey,
+        })?.id ?? null,
+      {
+        channelName: CHANNEL_NAME,
+        createdAt: now + 60,
+        parentEventId: rootId,
+        pubkey: MOCK_IDENTITY_PUBKEY,
+      },
+    );
+    expect(ownReplyId).not.toBeNull();
+
+    await page.getByTestId("open-threads-view").click();
+    await page.getByTestId("threads-view-row").first().click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toContainText("My last reply.");
+
+    await panel.getByTestId("message-input").click();
+    await page.keyboard.press("ArrowUp");
+    await expect(panel.getByTestId("edit-target")).toBeVisible();
+    await expect(panel.getByTestId("message-input")).toHaveText(
+      "My last reply.",
+    );
+    await page.keyboard.press("ControlOrMeta+A");
+    await page.keyboard.type("My last reply, edited.");
+    await page.keyboard.press("Enter");
+    await expect(panel.getByTestId("edit-target")).toBeHidden();
+    await expect(
+      panel.locator(`[data-message-id="${ownReplyId}"]`),
+    ).toContainText("My last reply, edited.");
+  });
+
   test("clearing the title removes the thread from the Threads view", async ({
     page,
   }) => {

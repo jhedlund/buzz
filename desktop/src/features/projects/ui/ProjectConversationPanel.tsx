@@ -37,6 +37,7 @@ import { useIdentityQuery } from "@/shared/api/hooks";
 import type { SearchHit } from "@/shared/api/searchTypes";
 import { getEventById } from "@/shared/api/tauri";
 import type { RelayEvent, RespondToMode } from "@/shared/api/types";
+import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { Button } from "@/shared/ui/button";
 
@@ -246,6 +247,29 @@ export function ProjectConversationPanel({
   const handleEdit = React.useCallback((message: { id: string }) => {
     setEditTargetId((current) => (current === message.id ? null : message.id));
   }, []);
+  const currentPubkey = identityQuery.data?.pubkey;
+  // ArrowUp in an empty composer edits your newest visible message, as the
+  // channel's thread panel does (useRoutedMessageEdit).
+  const handleEditLastOwnMessage = React.useCallback(() => {
+    if (!currentPubkey || !panelData.threadHead) return false;
+    let target: TimelineMessage | null = null;
+    for (const message of [
+      panelData.threadHead,
+      ...panelData.visibleReplies.map((entry) => entry.message),
+    ]) {
+      if (
+        message.kind === KIND_SYSTEM_MESSAGE ||
+        message.pubkey !== currentPubkey ||
+        message.pending ||
+        (target && message.createdAt < target.createdAt)
+      )
+        continue;
+      target = message;
+    }
+    if (!target) return false;
+    setEditTargetId(target.id);
+    return true;
+  }, [currentPubkey, panelData.threadHead, panelData.visibleReplies]);
   const handleEditSave = React.useCallback(
     async (
       content: string,
@@ -448,6 +472,9 @@ export function ProjectConversationPanel({
           onDelete={canManageMessages ? deleteMessage : undefined}
           onEdit={canManageMessages ? handleEdit : undefined}
           onEditSave={canManageMessages ? handleEditSave : undefined}
+          onEditLastOwnMessage={
+            canManageMessages ? handleEditLastOwnMessage : undefined
+          }
           onExpandReplies={handleExpandReplies}
           onMarkUnread={onMarkUnread ? handleMarkUnread : undefined}
           onFollowThread={
