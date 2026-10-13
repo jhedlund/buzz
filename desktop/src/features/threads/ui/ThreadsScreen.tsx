@@ -3,6 +3,7 @@ import { AnimatePresence } from "motion/react";
 import { useLocation } from "@tanstack/react-router";
 import * as React from "react";
 
+import { useAppShell } from "@/app/AppShellContext";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import {
@@ -312,7 +313,21 @@ export function ThreadsScreen() {
   const panelWidth = useThreadPanelWidth();
   const [openThread, setOpenThread] = React.useState<OpenThread | null>(null);
   const [selectedFilter, setSelectedFilter] = React.useState(readSessionFilter);
-  useMarkOpenThreadRead(openThread?.rootId ?? null);
+  const { feedItemState } = useAppShell();
+  // After "Mark unread" the open thread stops reading itself, or the replies
+  // would be read again at once; opening any thread (or closing) resumes it.
+  const [heldUnreadThread, setHeldUnreadThread] =
+    React.useState<OpenThread | null>(null);
+  useMarkOpenThreadRead(
+    openThread && openThread !== heldUnreadThread ? openThread.rootId : null,
+  );
+  const markOpenThreadUnread = React.useCallback(
+    (replyIds: string[]) => {
+      for (const id of replyIds) feedItemState.markUnread(id);
+      setHeldUnreadThread(openThread);
+    },
+    [feedItemState.markUnread, openThread],
+  );
 
   // Threads follow the channel thread layout preference: Focus opens the
   // large drawer over the list, Split keeps the list beside the thread.
@@ -473,6 +488,7 @@ export function ThreadsScreen() {
             }}
             key="threads-conversation"
             onClose={closeThread}
+            onMarkUnread={markOpenThreadUnread}
             onResetWidth={panelWidth.onResetWidth}
             onResizeStart={panelWidth.onResizeStart}
             titleOpensThread

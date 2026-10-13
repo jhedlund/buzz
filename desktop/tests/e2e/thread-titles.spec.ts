@@ -368,6 +368,45 @@ test.describe("thread titles", () => {
     await expect(row).not.toHaveAttribute("data-unread", "true");
   });
 
+  test("mark a reply unread from the Threads view", async ({ page }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    const rootId = await openThread(page, "Root of a thread to revisit.");
+    await nameOpenThread(page, "Revisit later");
+    await emitReply(page, rootId, "A reply to come back to.");
+
+    await page.getByTestId("open-threads-view").click();
+    const row = page.getByTestId("threads-view-row");
+    await row.click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toContainText("A reply to come back to.");
+    await expect(row).not.toHaveAttribute("data-unread", "true");
+
+    const replyId = await panel
+      .locator("[data-message-id]")
+      .filter({ hasText: "A reply to come back to." })
+      .last()
+      .getAttribute("data-message-id");
+    await panel.locator(`[data-message-id="${replyId}"]`).hover();
+    await page.getByTestId(`more-actions-${replyId}`).click();
+    await page.getByTestId(`mark-read-toggle-${replyId}`).click();
+
+    // The open thread must not read the reply straight back.
+    await expect(page.getByTestId("threads-view-row-unread")).toHaveText(
+      "1 new",
+    );
+    await expect(page.getByTestId("threads-unread-dot")).toBeVisible();
+
+    // Back on the list it is still unread; reopening the thread reads it.
+    await page.getByTestId("open-threads-view").click();
+    await expect(panel).toHaveCount(0);
+    await expect(row).toHaveAttribute("data-unread", "true");
+    await row.click();
+    await expect(panel).toContainText("A reply to come back to.");
+    await expect(row).not.toHaveAttribute("data-unread", "true");
+    await expect(page.getByTestId("threads-unread-dot")).toHaveCount(0);
+  });
+
   test("a pinned thread stays above more recently active ones", async ({
     page,
   }) => {

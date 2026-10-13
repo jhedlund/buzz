@@ -11,6 +11,10 @@ import { getThreadPanelLayout } from "@/features/channels/lib/threadPanelLayout"
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import {
+  buildDirectReplyIdsByParentId,
+  collectReplyDescendantIds,
+} from "@/features/channels/lib/subtreeCreatedAt";
+import {
   useChannelSubscription,
   useDeleteMessageMutation,
   useEditMessageMutation,
@@ -62,6 +66,7 @@ export function ProjectConversationPanel({
   headerLeading,
   hit,
   onClose,
+  onMarkUnread,
   onResetWidth,
   onResizeStart,
   sharedHeaderBackdrop,
@@ -74,6 +79,11 @@ export function ProjectConversationPanel({
   headerLeading?: React.ReactNode;
   hit: ConversationTarget;
   onClose: () => void;
+  /**
+   * Receives the reply ids a "Mark unread" covers: the chosen message's
+   * replies and, unless it is the root, the message itself.
+   */
+  onMarkUnread?: (replyIds: string[]) => void;
   onResetWidth: () => void;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   sharedHeaderBackdrop?: boolean;
@@ -280,6 +290,19 @@ export function ProjectConversationPanel({
     },
     [profiles, sendMessageMutation.mutateAsync],
   );
+  const handleMarkUnread = React.useCallback(
+    (message: TimelineMessage) => {
+      if (!onMarkUnread) return;
+      const descendantIds = collectReplyDescendantIds(
+        message.id,
+        buildDirectReplyIdsByParentId(panelData.messages),
+      );
+      onMarkUnread(
+        message.id === rootId ? descendantIds : [message.id, ...descendantIds],
+      );
+    },
+    [onMarkUnread, panelData.messages, rootId],
+  );
   const isFollowingThread = rootId ? isNotifiedForThread(rootId) : false;
   const canShowThread =
     Boolean(activeChannel && panelData.threadHead) &&
@@ -426,6 +449,7 @@ export function ProjectConversationPanel({
           onEdit={canManageMessages ? handleEdit : undefined}
           onEditSave={canManageMessages ? handleEditSave : undefined}
           onExpandReplies={handleExpandReplies}
+          onMarkUnread={onMarkUnread ? handleMarkUnread : undefined}
           onFollowThread={
             rootId && !isFollowingThread
               ? () => followThread(rootId)
