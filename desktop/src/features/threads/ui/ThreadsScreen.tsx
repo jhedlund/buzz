@@ -1,4 +1,4 @@
-import { MessagesSquare, Pin } from "lucide-react";
+import { ChevronRight, CircleCheck, MessagesSquare, Pin } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useLocation } from "@tanstack/react-router";
 import * as React from "react";
@@ -36,8 +36,10 @@ import {
   filterByChannel,
   threadChannelOptions,
 } from "@/features/threads/lib/threadChannelFilter";
+import { partitionByDone } from "@/features/threads/lib/threadDone";
 import { unreadReplyIdsForRoot } from "@/features/threads/lib/threadPaneUnread";
 import { partitionByPin } from "@/features/threads/lib/threadPins";
+import { useThreadDone } from "@/features/threads/lib/useThreadDone";
 import { useThreadPins } from "@/features/threads/lib/useThreadPins";
 import { ThreadsChannelFilterMenu } from "@/features/threads/ui/ThreadsChannelFilterMenu";
 import { useIdentityQuery } from "@/shared/api/hooks";
@@ -53,6 +55,7 @@ import { Button } from "@/shared/ui/button";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 const CHANNEL_FILTER_SESSION_KEY = "buzz.desktop.threads-channel-filter";
+const DONE_EXPANDED_SESSION_KEY = "buzz.desktop.threads-done-expanded";
 
 const FOCUS_DRAWER = { backLabel: "Back to Threads" };
 
@@ -81,6 +84,26 @@ function writeSessionFilter(channelId: string | null) {
     }
   } catch {
     // Storage can be unavailable; the filter still works for this visit.
+  }
+}
+
+function readDoneExpanded(): boolean {
+  try {
+    return window.sessionStorage.getItem(DONE_EXPANDED_SESSION_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeDoneExpanded(expanded: boolean) {
+  try {
+    if (expanded) {
+      window.sessionStorage.setItem(DONE_EXPANDED_SESSION_KEY, "1");
+    } else {
+      window.sessionStorage.removeItem(DONE_EXPANDED_SESSION_KEY);
+    }
+  } catch {
+    // Storage can be unavailable; the section still toggles for this visit.
   }
 }
 
@@ -113,8 +136,10 @@ function ThreadWorkingBadge({ summary }: { summary: ActiveThreadTurnSummary }) {
 function ThreadRow({
   channel,
   currentPubkey,
+  done,
   entry,
   onOpen,
+  onToggleDone,
   onTogglePin,
   pinned,
   selected,
@@ -123,8 +148,10 @@ function ThreadRow({
 }: {
   channel: Channel | undefined;
   currentPubkey: string | undefined;
+  done: boolean;
   entry: ThreadTitle;
   onOpen: (entry: ThreadTitle, channel: Channel | undefined) => void;
+  onToggleDone: ((rootId: string) => void) | undefined;
   onTogglePin: ((rootId: string) => void) | undefined;
   pinned: boolean;
   selected: boolean;
@@ -142,6 +169,7 @@ function ThreadRow({
       <button
         aria-current={selected ? "true" : undefined}
         className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-lg px-3 py-2 text-left focus-visible:outline-none"
+        data-done={done ? "true" : undefined}
         data-pinned={pinned ? "true" : undefined}
         data-selected={selected ? "true" : undefined}
         data-testid="threads-view-row"
@@ -155,11 +183,22 @@ function ThreadRow({
               "min-w-0 flex-1 truncate text-sm",
               hasUnread
                 ? "font-bold text-foreground"
-                : "font-normal text-foreground/80",
+                : done
+                  ? "font-normal text-foreground/55"
+                  : "font-normal text-foreground/80",
             )}
           >
             {entry.title}
           </span>
+          {done && hasUnread ? (
+            <span
+              className="inline-flex shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-2xs font-medium leading-none text-muted-foreground"
+              data-testid="threads-view-row-done-badge"
+              title="Marked done; it has new replies"
+            >
+              Done
+            </span>
+          ) : null}
           {working ? <ThreadWorkingBadge summary={working} /> : null}
           {hasUnread ? (
             <span
@@ -184,6 +223,25 @@ function ThreadRow({
           </span>
         </span>
       </button>
+      {onToggleDone ? (
+        <button
+          aria-label={done ? "Mark thread not done" : "Mark thread done"}
+          aria-pressed={done}
+          className={cn(
+            "flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            !onTogglePin && "mr-2",
+            done
+              ? "text-primary"
+              : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100",
+          )}
+          data-testid="threads-view-row-done"
+          onClick={() => onToggleDone(entry.rootId)}
+          title={done ? "Mark thread not done" : "Mark thread done"}
+          type="button"
+        >
+          <CircleCheck className="h-3.5 w-3.5" />
+        </button>
+      ) : null}
       {onTogglePin ? (
         <button
           aria-label={pinned ? "Unpin thread" : "Pin thread"}
@@ -228,6 +286,17 @@ function ThreadsBody({
     relayOrigin,
     currentPubkey,
   );
+  const { done: doneRoots, toggle: handleToggleDone } = useThreadDone(
+    relayOrigin,
+    currentPubkey,
+  );
+  const [doneExpanded, setDoneExpanded] = React.useState(readDoneExpanded);
+  const toggleDoneExpanded = React.useCallback(() => {
+    setDoneExpanded((current) => {
+      writeDoneExpanded(!current);
+      return !current;
+    });
+  }, []);
 
   if (titlesQuery.isPending) {
     return (
@@ -272,20 +341,26 @@ function ThreadsBody({
     );
   }
 
-  const { pinned, unpinned } = partitionByPin(
+  // Done splits off first, so a done thread stays in Done even when pinned;
+  // reopening it puts it back in its pinned place.
+  const { active, done } = partitionByDone(
     filterByChannel(titlesQuery.data, channelFilter),
-    pinnedRoots,
+    doneRoots,
+    unreadCounts,
   );
-  const renderRows = (entries: ThreadTitle[], isPinned: boolean) =>
+  const { pinned, unpinned } = partitionByPin(active, pinnedRoots);
+  const renderRows = (entries: ThreadTitle[]) =>
     entries.map((entry) => (
       <li key={`${entry.channelId}:${entry.rootId}`}>
         <ThreadRow
           channel={channelsById.get(entry.channelId)}
           currentPubkey={currentPubkey}
+          done={doneRoots.has(entry.rootId.toLowerCase())}
           entry={entry}
           onOpen={onOpen}
+          onToggleDone={handleToggleDone}
           onTogglePin={handleTogglePin}
-          pinned={isPinned}
+          pinned={pinnedRoots.has(entry.rootId.toLowerCase())}
           selected={entry.rootId === selectedRootId}
           unreadCount={unreadCounts.get(entry.rootId) ?? 0}
           working={workingThreads.get(entry.rootId)}
@@ -293,11 +368,48 @@ function ThreadsBody({
       </li>
     ));
 
+  const doneSection =
+    done.length > 0 ? (
+      <section data-testid="threads-view-done">
+        <button
+          aria-controls="threads-view-done-list"
+          aria-expanded={doneExpanded}
+          className="flex items-center gap-1 rounded-md px-3 pb-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          data-testid="threads-view-done-toggle"
+          onClick={toggleDoneExpanded}
+          type="button"
+        >
+          <ChevronRight
+            className={cn(
+              "h-3.5 w-3.5 transition-transform",
+              doneExpanded && "rotate-90",
+            )}
+          />
+          Done
+          <span className="tabular-nums">({done.length})</span>
+        </button>
+        {doneExpanded ? (
+          <ul
+            aria-label="Done threads"
+            className="flex flex-col"
+            id="threads-view-done-list"
+          >
+            {renderRows(done)}
+          </ul>
+        ) : null}
+      </section>
+    ) : null;
+
   if (pinned.length === 0) {
     return (
-      <ul aria-label="Named threads" className="flex flex-col">
-        {renderRows(unpinned, false)}
-      </ul>
+      <div className="flex flex-col gap-3">
+        {unpinned.length > 0 ? (
+          <ul aria-label="Named threads" className="flex flex-col">
+            {renderRows(unpinned)}
+          </ul>
+        ) : null}
+        {doneSection}
+      </div>
     );
   }
 
@@ -315,7 +427,7 @@ function ThreadsBody({
           className="flex flex-col"
           data-testid="threads-view-pinned"
         >
-          {renderRows(pinned, true)}
+          {renderRows(pinned)}
         </ul>
       </section>
       {unpinned.length > 0 ? (
@@ -327,10 +439,11 @@ function ThreadsBody({
             Recent
           </h2>
           <ul aria-label="Named threads" className="flex flex-col">
-            {renderRows(unpinned, false)}
+            {renderRows(unpinned)}
           </ul>
         </section>
       ) : null}
+      {doneSection}
     </div>
   );
 }

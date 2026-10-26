@@ -814,6 +814,87 @@ test.describe("thread titles", () => {
     await expect(rows).toHaveText([/Busy thread/, /Pin me/]);
   });
 
+  test("a done thread moves to the collapsed Done section and resurfaces on new replies", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    const finishRoot = await openThread(page, "Root of the thread to finish.");
+    await nameOpenThread(page, "Finish me");
+    await openThread(page, "Root of a busier thread.", {
+      replyCreatedAt: Math.floor(Date.now() / 1000) + 60,
+    });
+    await nameOpenThread(page, "Busy thread");
+
+    await page.getByTestId("open-threads-view").click();
+    const rows = page.getByTestId("threads-view-row");
+    await expect(rows).toHaveText([/Busy thread/, /Finish me/]);
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+
+    const finishItem = page
+      .getByRole("listitem")
+      .filter({ hasText: "Finish me" });
+    // Pinned first, so reopening later can show it returns to its pin.
+    await finishItem.getByTestId("threads-view-row-pin").click();
+    await expect(rows).toHaveText([/Finish me/, /Busy thread/]);
+
+    const doneButton = finishItem.getByTestId("threads-view-row-done");
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
+    await doneButton.click();
+    const doneSection = page.getByTestId("threads-view-done");
+    const doneToggle = page.getByTestId("threads-view-done-toggle");
+    await expect(doneToggle).toHaveText("Done(1)");
+    await expect(doneToggle).toHaveAttribute("aria-expanded", "false");
+    await expect(page.getByTestId("threads-view-pinned")).toHaveCount(0);
+    await expect(rows).toHaveText([/Busy thread/]);
+
+    await doneToggle.click();
+    await expect(doneSection.getByTestId("threads-view-row")).toHaveText([
+      /Finish me/,
+    ]);
+    await expect(doneButton).toHaveAttribute("aria-pressed", "true");
+
+    // Leaving and reopening the view keeps the mark and the expanded section.
+    await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+    await page.getByTestId("open-threads-view").click();
+    await expect(doneToggle).toHaveAttribute("aria-expanded", "true");
+    await expect(doneSection.getByTestId("threads-view-row")).toHaveText([
+      /Finish me/,
+    ]);
+
+    // A new reply brings it back above the fold, still marked done.
+    await emitReply(page, finishRoot, "One more thing on the finished thread.");
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    const resurfaced = rows.filter({ hasText: "Finish me" });
+    await expect(resurfaced).toHaveAttribute("data-unread", "true");
+    await expect(resurfaced).toHaveAttribute("data-done", "true");
+    await expect(
+      finishItem.getByTestId("threads-view-row-done-badge"),
+    ).toBeVisible();
+
+    // Reading it sends it back to Done.
+    await resurfaced.click();
+    await expect(page.getByTestId("message-thread-panel")).toContainText(
+      "One more thing on the finished thread.",
+    );
+    await expect(
+      doneSection.getByTestId("threads-view-row").filter({
+        hasText: "Finish me",
+      }),
+    ).not.toHaveAttribute("data-unread", "true");
+    // Clicking Threads again closes the open thread.
+    await page.getByTestId("open-threads-view").click();
+    await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
+
+    // Reopening restores its pinned place.
+    await doneButton.click();
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    await expect(page.getByTestId("threads-view-pinned")).toContainText(
+      "Finish me",
+    );
+    await expect(rows).toHaveText([/Finish me/, /Busy thread/]);
+  });
+
   test("a title another user sets appears before anyone replies", async ({
     page,
   }) => {
