@@ -814,7 +814,7 @@ test.describe("thread titles", () => {
     await expect(rows).toHaveText([/Busy thread/, /Pin me/]);
   });
 
-  test("a done thread moves to the collapsed Done section and resurfaces on new replies", async ({
+  test("a done thread stays pinned until unpinned, then collapses into Done and resurfaces on new replies", async ({
     page,
   }) => {
     await installMockBridge(page);
@@ -834,13 +834,26 @@ test.describe("thread titles", () => {
     const finishItem = page
       .getByRole("listitem")
       .filter({ hasText: "Finish me" });
-    // Pinned first, so reopening later can show it returns to its pin.
-    await finishItem.getByTestId("threads-view-row-pin").click();
+    const pinButton = finishItem.getByTestId("threads-view-row-pin");
+    await pinButton.click();
     await expect(rows).toHaveText([/Finish me/, /Busy thread/]);
 
+    // Marking a pinned thread done keeps it in Pinned, shown as done.
     const doneButton = finishItem.getByTestId("threads-view-row-done");
     await expect(doneButton).toHaveAttribute("aria-pressed", "false");
     await doneButton.click();
+    await expect(doneButton).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      page.getByTestId("threads-view-pinned").getByTestId("threads-view-row"),
+    ).toHaveText([/Finish me/]);
+    await expect(rows.filter({ hasText: "Finish me" })).toHaveAttribute(
+      "data-done",
+      "true",
+    );
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+
+    // Unpinning it drops it into the collapsed Done section.
+    await pinButton.click();
     const doneSection = page.getByTestId("threads-view-done");
     const doneToggle = page.getByTestId("threads-view-done-toggle");
     await expect(doneToggle).toHaveText("Done(1)");
@@ -886,9 +899,18 @@ test.describe("thread titles", () => {
     await page.getByTestId("open-threads-view").click();
     await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
 
-    // Reopening restores its pinned place.
-    await doneButton.click();
+    // Pinning it from Done lifts it back to Pinned, still marked done.
+    await pinButton.click();
     await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    await expect(page.getByTestId("threads-view-pinned")).toContainText(
+      "Finish me",
+    );
+    await expect(doneButton).toHaveAttribute("aria-pressed", "true");
+    await expect(rows).toHaveText([/Finish me/, /Busy thread/]);
+
+    // Reopening it leaves it where it is.
+    await doneButton.click();
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
     await expect(page.getByTestId("threads-view-pinned")).toContainText(
       "Finish me",
     );

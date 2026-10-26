@@ -341,14 +341,18 @@ function ThreadsBody({
     );
   }
 
-  // Done splits off first, so a done thread stays in Done even when pinned;
-  // reopening it puts it back in its pinned place.
-  const { active, done } = partitionByDone(
+  // Pin wins over done for placement: a pinned thread stays in Pinned (shown
+  // as done) until it is unpinned, and only unpinned done threads collapse
+  // into Done.
+  const { pinned, unpinned: unpinnedAll } = partitionByPin(
     filterByChannel(titlesQuery.data, channelFilter),
+    pinnedRoots,
+  );
+  const { active: unpinned, done } = partitionByDone(
+    unpinnedAll,
     doneRoots,
     unreadCounts,
   );
-  const { pinned, unpinned } = partitionByPin(active, pinnedRoots);
   const renderRows = (entries: ThreadTitle[]) =>
     entries.map((entry) => (
       <li key={`${entry.channelId}:${entry.rootId}`}>

@@ -131,22 +131,40 @@ test("a done thread with unread replies stays active", () => {
   );
 });
 
-test("a done and pinned thread lands in done, and pinning applies to the rest", () => {
+test("a pinned thread stays pinned even when done; only unpinned done threads land in done", () => {
   const entries = [{ rootId: A }, { rootId: B }, { rootId: C }];
-  const pinned = new Set([A, B]);
-  const { active, done } = partitionByDone(entries, new Set([A]), NO_UNREAD);
-  assert.deepEqual(
-    done.map((entry) => entry.rootId),
-    [A],
-  );
-  const grouped = partitionByPin(active, pinned);
+  const grouped = partitionByPin(entries, new Set([A, B]));
   assert.deepEqual(
     grouped.pinned.map((entry) => entry.rootId),
-    [B],
+    [A, B],
+  );
+  const { active, done } = partitionByDone(
+    grouped.unpinned,
+    new Set([A, C]),
+    NO_UNREAD,
+  );
+  assert.deepEqual(active, []);
+  assert.deepEqual(
+    done.map((entry) => entry.rootId),
+    [C],
+  );
+});
+
+test("an unpinned done thread lands in done beside active ones", () => {
+  const entries = [{ rootId: A }, { rootId: B }, { rootId: C }];
+  const grouped = partitionByPin(entries, new Set([A]));
+  const { active, done } = partitionByDone(
+    grouped.unpinned,
+    new Set([B]),
+    NO_UNREAD,
   );
   assert.deepEqual(
-    grouped.unpinned.map((entry) => entry.rootId),
+    active.map((entry) => entry.rootId),
     [C],
+  );
+  assert.deepEqual(
+    done.map((entry) => entry.rootId),
+    [B],
   );
 });
 
