@@ -162,7 +162,7 @@ function ThreadRow({
   return (
     <div
       className={cn(
-        "group/thread-row relative flex min-w-0 items-center rounded-lg hover:bg-accent focus-within:bg-accent",
+        "group/thread-row relative flex min-w-0 items-center rounded-lg hover:bg-accent has-[:focus-visible]:bg-accent",
         selected && "bg-accent",
       )}
     >
@@ -232,7 +232,7 @@ function ThreadRow({
             !onTogglePin && "mr-2",
             done
               ? "text-primary"
-              : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100",
+              : "opacity-0 group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100",
           )}
           data-testid="threads-view-row-done"
           onClick={() => onToggleDone(entry.rootId)}
@@ -250,7 +250,7 @@ function ThreadRow({
             "mr-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-background hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
             pinned
               ? "text-primary"
-              : "opacity-0 group-hover/thread-row:opacity-100 group-focus-within/thread-row:opacity-100",
+              : "opacity-0 group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100",
           )}
           data-testid="threads-view-row-pin"
           onClick={() => onTogglePin(entry.rootId)}

@@ -852,6 +852,20 @@ test.describe("thread titles", () => {
     );
     await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
 
+    // Reopening it in place hides the check once the pointer leaves, even
+    // though the clicked button keeps focus; keyboard focus still reveals it.
+    await doneButton.click();
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
+    await expect(doneButton).toBeFocused();
+    await page.mouse.move(0, 0);
+    await expect(doneButton).toHaveCSS("opacity", "0");
+    await doneButton.press("Shift+Tab");
+    await page.keyboard.press("Tab");
+    await expect(doneButton).toBeFocused();
+    await expect(doneButton).toHaveCSS("opacity", "1");
+    await doneButton.click();
+    await expect(doneButton).toHaveAttribute("aria-pressed", "true");
+
     // Unpinning it drops it into the collapsed Done section.
     await pinButton.click();
     const doneSection = page.getByTestId("threads-view-done");
