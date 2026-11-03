@@ -9,22 +9,23 @@ import {
   setThreadDone,
   threadDoneStoresEqual,
   writeThreadDoneStore,
+  type ThreadDoneEntry,
   type ThreadDoneStore,
 } from "./threadDone";
 import { ThreadDoneSyncManager, type RemoteThreadDone } from "./threadDoneSync";
 
 /**
- * The current identity's done thread roots (root → marked-at ms), synced
- * across devices, plus an explicit setter. Setting is unavailable (undefined)
+ * The current identity's done marks by thread root, synced across devices,
+ * plus an explicit setter. Setting is unavailable (undefined)
  * until the relay and identity resolve.
  */
 export function useThreadDone(
   relayUrl: string | null,
   pubkey: string | undefined,
 ): {
-  done: ReadonlyMap<string, number>;
+  done: ReadonlyMap<string, ThreadDoneEntry>;
   setDone:
-    | ((rootId: string, done: boolean, notBeforeMs?: number) => void)
+    | ((rootId: string, done: boolean, activityAt: number) => void)
     | undefined;
 } {
   const [store, setStore] = React.useState<ThreadDoneStore>(
@@ -130,16 +131,15 @@ export function useThreadDone(
 
   const setDone = React.useMemo(() => {
     if (!relayUrl || !pubkey) return undefined;
-    // `notBeforeMs` floors the mark at the thread's latest activity, so a
-    // reply stamped by a clock running ahead cannot reopen it straight away.
-    return (rootId: string, done: boolean, notBeforeMs = 0) => {
+    return (rootId: string, done: boolean, activityAt: number) => {
       // Computed from the ref, not inside a state updater, so the write and
       // publish run exactly once even under StrictMode's double-invoke.
       const next = setThreadDone(
         storeRef.current,
         rootId,
         done,
-        Math.max(Date.now(), notBeforeMs),
+        Date.now(),
+        activityAt,
       );
       storeRef.current = next;
       setStore(next);

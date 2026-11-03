@@ -901,15 +901,13 @@ test.describe("thread titles", () => {
       /Finish me/,
     ]);
 
-    // Your own reply reopens it. Reply timestamps are whole seconds, so let
-    // the second the mark was made in pass first.
+    // Your own reply reopens it.
     await doneSection
       .getByTestId("threads-view-row")
       .filter({ hasText: "Finish me" })
       .click();
     const panel = page.getByTestId("message-thread-panel");
     await expect(panel).toContainText("Root of the thread to finish.");
-    await page.waitForTimeout(1_100);
     await panel.getByTestId("message-input").click();
     await page.keyboard.type("Actually, one follow-up from me.");
     await page.keyboard.press("Enter");
@@ -949,6 +947,30 @@ test.describe("thread titles", () => {
     // Clicking Threads again closes the open thread.
     await page.getByTestId("open-threads-view").click();
     await expect(panel).toHaveCount(0);
+
+    // A reply read in its channel, away from Threads, still reopens it.
+    await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+    await emitReply(
+      page,
+      finishRoot,
+      "Read this one in the channel.",
+      Math.floor(Date.now() / 1000) + 10,
+    );
+    // The root's own summary row is the first one after it.
+    await page
+      .locator(
+        `xpath=//*[@data-message-id="${finishRoot}"]/following::*[@data-testid="message-thread-summary"][1]`,
+      )
+      .click();
+    await expect(panel).toContainText("Read this one in the channel.");
+    await page.getByTestId("open-threads-view").click();
+    await expect(resurfaced).not.toHaveAttribute("data-unread", "true");
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
+    await doneButton.click();
+    await expect(doneSection.getByTestId("threads-view-row")).toHaveText([
+      /Finish me/,
+    ]);
 
     // Pinning it from Done lifts it back to Pinned, still marked done.
     await pinButton.click();

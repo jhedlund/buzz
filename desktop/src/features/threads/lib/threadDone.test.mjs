@@ -17,20 +17,25 @@ const A = "a".repeat(64);
 const B = "b".repeat(64);
 const C = "c".repeat(64);
 const NO_UNREAD = new Map();
-/** Marked done at 1,000,000 ms, after every row's activity below. */
-const MARKED_AT = 1_000_000;
+/** Rows below last saw activity at 900 s; marks record that frontier. */
+const FRONTIER = 900;
 
 function store(roots = {}) {
   return { version: 1, roots };
 }
 
-/** A row whose last activity (seconds) predates {@link MARKED_AT}. */
-function row(rootId, lastActivityAt = 900) {
+/** A row whose last activity (seconds) is at the marks' frontier. */
+function row(rootId, lastActivityAt = FRONTIER) {
   return { rootId, lastActivityAt };
 }
 
 function marked(...roots) {
-  return new Map(roots.map((root) => [root, MARKED_AT]));
+  return new Map(
+    roots.map((root) => [
+      root,
+      { done: true, updatedAt: 5_000_000, activityAt: FRONTIER },
+    ]),
+  );
 }
 
 test("setThreadDone marks done, then reopens as a tombstone, normalizing the root", () => {
@@ -44,13 +49,22 @@ test("setThreadDone marks done, then reopens as a tombstone, normalizing the roo
   const reopened = setThreadDone(done, A, false, 200);
   assert.deepEqual(reopened, store({ [A]: { done: false, updatedAt: 200 } }));
   assert.deepEqual([...doneRoots(reopened)], []);
-  assert.deepEqual([...doneRoots(done)], [[A, 100]]);
+  assert.deepEqual([...doneRoots(done)], [[A, { done: true, updatedAt: 100 }]]);
 });
 
 test("marking an already-done thread done again restamps it instead of flipping it", () => {
-  const done = setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 100);
-  const again = setThreadDone(done, A, true, 300);
-  assert.deepEqual(again.roots[A], { done: true, updatedAt: 300 });
+  const done = setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 100, 10);
+  const again = setThreadDone(done, A, true, 300, 20);
+  assert.deepEqual(again.roots[A], {
+    done: true,
+    updatedAt: 300,
+    activityAt: 20,
+  });
+  assert.deepEqual(
+    setThreadDone(again, A, false, 400, 30).roots[A],
+    { done: false, updatedAt: 400 },
+    "a reopen keeps no frontier",
+  );
 });
 
 test("setThreadDone advances updatedAt even when the clock went backwards", () => {
@@ -138,8 +152,8 @@ test("partitionByDone keeps activity order within each group", () => {
   );
 });
 
-test("activity after the done mark reopens the thread, read or not", () => {
-  const entries = [row(A, 1_001), row(B, 1_000), row(C, 999)];
+test("activity past the frontier reopens the thread, read or not", () => {
+  const entries = [row(A, FRONTIER + 1), row(B), row(C, FRONTIER - 1)];
   const { active, done } = partitionByDone(entries, marked(A, B, C), NO_UNREAD);
   assert.deepEqual(
     active.map((entry) => entry.rootId),
@@ -148,19 +162,55 @@ test("activity after the done mark reopens the thread, read or not", () => {
   assert.deepEqual(
     done.map((entry) => entry.rootId),
     [B, C],
-    "activity in the same second as the mark keeps it done",
   );
 });
 
-test("marking a reopened thread done again files it away", () => {
-  const entry = row(A, 2_000);
-  const reopened = setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, MARKED_AT);
-  assert.equal(isThreadDone(entry, doneRoots(reopened), NO_UNREAD), false);
-  const remarked = setThreadDone(reopened, A, true, 2_000_000);
-  assert.equal(isThreadDone(entry, doneRoots(remarked), NO_UNREAD), true);
+test("a reply in the same second as the mark reopens the thread", () => {
+  // Marked at 1000.500 s with the thread last active at 999 s; the reply is
+  // stamped 1000 s, before the mark by wall clock.
+  const marks = doneRoots(
+    setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 1_000_500, 999),
+  );
+  assert.equal(isThreadDone(row(A, 999), marks, NO_UNREAD), true);
+  assert.equal(isThreadDone(row(A, 1_000), marks, NO_UNREAD), false);
 });
 
-test("a done thread with unread replies stays active before its activity refreshes", () => {
+test("a reply from a sender whose clock runs behind still reopens the thread", () => {
+  // Marked at 2000 s; the sender's clock is 60 s slow, so the reply is stamped
+  // 1940 s. It is still past the 1900 s frontier.
+  const marks = doneRoots(
+    setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 2_000_000, 1_900),
+  );
+  assert.equal(isThreadDone(row(A, 1_940), marks, NO_UNREAD), false);
+});
+
+test("a mark made while the latest reply's clock ran ahead still files it away", () => {
+  // The latest reply is stamped 30 s in the future of the marking device.
+  const marks = doneRoots(
+    setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 1_000_000, 1_030),
+  );
+  assert.equal(isThreadDone(row(A, 1_030), marks, NO_UNREAD), true);
+});
+
+test("a mark from before the frontier field compares activity with when it was made", () => {
+  const legacy = new Map([[A, { done: true, updatedAt: 1_000_000 }]]);
+  assert.equal(isThreadDone(row(A, 1_000), legacy, NO_UNREAD), true);
+  assert.equal(isThreadDone(row(A, 1_001), legacy, NO_UNREAD), false);
+});
+
+test("marking a reopened thread done again files it away", () => {
+  const marks = doneRoots(
+    setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 1_000, FRONTIER),
+  );
+  const entry = row(A, FRONTIER + 50);
+  assert.equal(isThreadDone(entry, marks, NO_UNREAD), false);
+  const remarked = doneRoots(
+    setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 2_000, FRONTIER + 50),
+  );
+  assert.equal(isThreadDone(entry, remarked, NO_UNREAD), true);
+});
+
+test("a done thread with unread replies stays active, even at the frontier", () => {
   const entries = [row(A), row(B)];
   const { active, done } = partitionByDone(
     entries,
@@ -253,5 +303,15 @@ test("parseThreadDonePayload rejects malformed payloads and bad entries", () => 
       },
     }),
     store({ [A]: { done: true, updatedAt: 5 } }),
+  );
+  assert.deepEqual(
+    parseThreadDonePayload({
+      version: 1,
+      roots: {
+        [A]: { done: true, updatedAt: 5, activityAt: 4 },
+        [B]: { done: true, updatedAt: 5, activityAt: "4" },
+      },
+    }),
+    store({ [A]: { done: true, updatedAt: 5, activityAt: 4 } }),
   );
 });

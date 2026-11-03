@@ -27,7 +27,6 @@ import {
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import { formatWorkingTooltip } from "@/features/sidebar/ui/SidebarSection";
 import {
-  useLiveTitledThreadActivity,
   useMarkOpenThreadRead,
   useThreadTitlesQuery,
   useTitledThreadUnreadCounts,
@@ -156,7 +155,7 @@ function ThreadRow({
   entry: ThreadTitle;
   onOpen: (entry: ThreadTitle, channel: Channel | undefined) => void;
   onSetDone:
-    | ((rootId: string, done: boolean, notBeforeMs?: number) => void)
+    | ((rootId: string, done: boolean, activityAt: number) => void)
     | undefined;
   onTogglePin: ((rootId: string) => void) | undefined;
   pinned: boolean;
@@ -232,9 +231,7 @@ function ThreadRow({
               : "opacity-0 group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100",
           )}
           data-testid="threads-view-row-done"
-          onClick={() =>
-            onSetDone(entry.rootId, !done, entry.lastActivityAt * 1000)
-          }
+          onClick={() => onSetDone(entry.rootId, !done, entry.lastActivityAt)}
           title={done ? "Mark thread not done" : "Mark thread done"}
           type="button"
         >
@@ -279,7 +276,6 @@ function ThreadsBody({
   titlesQuery: ReturnType<typeof useThreadTitlesQuery>;
 }) {
   const unreadCounts = useTitledThreadUnreadCounts();
-  useLiveTitledThreadActivity();
   const workingThreads = useActiveAgentTurnsByThread();
   const relayOrigin = useRelayOrigin();
   const { pinned: pinnedRoots, toggle: handleTogglePin } = useThreadPins(

@@ -101,23 +101,25 @@ export function useTitledThreadUnreadCounts(): ReadonlyMap<string, number> {
 }
 
 /**
- * Folds unread replies into the cached titles list as they arrive, so a done
- * thread they reopen stays open once they are read, rather than waiting for
- * the next poll to carry the newer activity.
+ * Folds live thread replies into the cached titles list as they arrive, so a
+ * done thread they reopen stays open once they are read, rather than waiting
+ * for the next poll to carry the newer activity. Reads the persisted activity
+ * log, which keeps replies after they are read, and is mounted by the
+ * always-present sidebar entry so replies read elsewhere still count.
  */
 export function useLiveTitledThreadActivity(): void {
   const queryClient = useQueryClient();
   const query = useThreadTitlesQuery();
-  const { unreadThreadFeedItems } = useAppShell();
+  const { threadActivityItems, unreadThreadFeedItems } = useAppShell();
   const activity = React.useMemo(() => {
     const latest = new Map<string, number>();
-    for (const item of unreadThreadFeedItems) {
+    for (const item of [...threadActivityItems, ...unreadThreadFeedItems]) {
       const rootId = getThreadReference(item.tags).rootId?.toLowerCase();
       if (!rootId) continue;
       latest.set(rootId, Math.max(latest.get(rootId) ?? 0, item.createdAt));
     }
     return latest;
-  }, [unreadThreadFeedItems]);
+  }, [threadActivityItems, unreadThreadFeedItems]);
   React.useEffect(() => {
     const next = applyThreadActivity(query.data, activity);
     if (next !== query.data) {

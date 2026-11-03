@@ -9,7 +9,16 @@ const THREAD_DONE_PREFIX = "buzz.threads.done.v1";
 /** Upper bound on stored roots, done marks and tombstones together. */
 export const MAX_THREAD_DONE_ENTRIES = 500;
 
-export type ThreadDoneEntry = { done: boolean; updatedAt: number };
+export type ThreadDoneEntry = {
+  done: boolean;
+  updatedAt: number;
+  /**
+   * The thread's latest activity (seconds) when it was marked done. Activity
+   * past it reopens the thread. Marks written before this field fall back to
+   * comparing activity with `updatedAt`.
+   */
+  activityAt?: number;
+};
 
 export type ThreadDoneStore = {
   version: 1;
@@ -23,6 +32,10 @@ export const EMPTY_THREAD_DONE_STORE: ThreadDoneStore = Object.freeze({
 }) as ThreadDoneStore;
 
 const ROOT_ID_RE = /^[0-9a-f]{64}$/;
+
+function isTimestamp(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
 
 export function threadDoneStorageKey(relayOrigin: string, pubkey: string) {
   return `${THREAD_DONE_PREFIX}.${encodeURIComponent(relayOrigin)}.${pubkey.toLowerCase()}`;
@@ -44,9 +57,8 @@ export function parseThreadDonePayload(value: unknown): ThreadDoneStore | null {
             typeof mark === "object" &&
             mark !== null &&
             typeof mark.done === "boolean" &&
-            typeof mark.updatedAt === "number" &&
-            Number.isFinite(mark.updatedAt) &&
-            mark.updatedAt >= 0
+            isTimestamp(mark.updatedAt) &&
+            (mark.activityAt === undefined || isTimestamp(mark.activityAt))
           );
         },
       ),
@@ -72,12 +84,14 @@ function capEntries(roots: Record<string, ThreadDoneEntry>) {
 /**
  * Sets the state explicitly rather than flipping it: a thread reopened by new
  * activity is still stored as done, and marking it done again must restamp it.
+ * `activityAt` is the thread's latest activity as the user saw it when marking.
  */
 export function setThreadDone(
   store: ThreadDoneStore,
   rootId: string,
   done: boolean,
   nowMs: number,
+  activityAt?: number,
 ): ThreadDoneStore {
   const root = rootId.toLowerCase();
   const current = store.roots[root];
@@ -88,7 +102,10 @@ export function setThreadDone(
     version: 1,
     roots: capEntries({
       ...store.roots,
-      [root]: { done, updatedAt },
+      [root]:
+        done && activityAt !== undefined
+          ? { done, updatedAt, activityAt }
+          : { done, updatedAt },
     }),
   };
 }
@@ -124,38 +141,43 @@ export function threadDoneStoresEqual(
     return (
       rightEntry !== undefined &&
       rightEntry.done === left.roots[root].done &&
-      rightEntry.updatedAt === left.roots[root].updatedAt
+      rightEntry.updatedAt === left.roots[root].updatedAt &&
+      rightEntry.activityAt === left.roots[root].activityAt
     );
   });
 }
 
-/** Done thread roots → when each was marked done (ms). */
-export function doneRoots(store: ThreadDoneStore): ReadonlyMap<string, number> {
-  return new Map(
-    Object.entries(store.roots)
-      .filter(([, entry]) => entry.done)
-      .map(([root, entry]) => [root, entry.updatedAt]),
-  );
+/** Done thread roots → their done marks. */
+export function doneRoots(
+  store: ThreadDoneStore,
+): ReadonlyMap<string, ThreadDoneEntry> {
+  return new Map(Object.entries(store.roots).filter(([, entry]) => entry.done));
 }
 
 /**
  * A thread is done only while nothing has happened since it was marked:
  * any later activity, including the user's own reply, reopens it until it is
  * marked done again. That is a view rule, so no device writes to the store
- * when a reply lands. Unread replies also reopen it, because the activity
- * timestamp only refreshes when the list is refetched.
+ * when a reply lands.
+ *
+ * "Later" compares the thread's activity with the activity it had when it was
+ * marked, both stamped by authors, so the marking device's clock plays no
+ * part and a reply in the same second as the mark still counts. Unread
+ * replies also reopen it, covering a reply stamped no later than the one
+ * before it until it is read.
  */
 export function isThreadDone(
   entry: { rootId: string; lastActivityAt: number },
-  done: ReadonlyMap<string, number>,
+  done: ReadonlyMap<string, ThreadDoneEntry>,
   unreadCounts: ReadonlyMap<string, number>,
 ): boolean {
-  const markedAtMs = done.get(entry.rootId.toLowerCase());
-  return (
-    markedAtMs !== undefined &&
-    entry.lastActivityAt * 1000 <= markedAtMs &&
-    (unreadCounts.get(entry.rootId) ?? 0) === 0
-  );
+  const mark = done.get(entry.rootId.toLowerCase());
+  if (!mark) return false;
+  const quiet =
+    mark.activityAt !== undefined
+      ? entry.lastActivityAt <= mark.activityAt
+      : entry.lastActivityAt * 1000 <= mark.updatedAt;
+  return quiet && (unreadCounts.get(entry.rootId) ?? 0) === 0;
 }
 
 /** Splits off done threads, keeping the incoming activity order. */
@@ -163,7 +185,7 @@ export function partitionByDone<
   T extends { rootId: string; lastActivityAt: number },
 >(
   entries: readonly T[],
-  done: ReadonlyMap<string, number>,
+  done: ReadonlyMap<string, ThreadDoneEntry>,
   unreadCounts: ReadonlyMap<string, number>,
 ): { active: T[]; done: T[] } {
   const active: T[] = [];
