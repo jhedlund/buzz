@@ -7,6 +7,7 @@ import { useActiveAgentTurnsByThread } from "@/features/agents/activeAgentTurnsS
 import { getThreadReference } from "@/features/messages/lib/threading";
 import {
   applyRootTitleWrite,
+  applyThreadActivity,
   applyTitleWrite,
   batchTitleSyncChannels,
   countUnreadByTitledRoot,
@@ -97,6 +98,32 @@ export function useTitledThreadUnreadCounts(): ReadonlyMap<string, number> {
       ),
     [query.data, unreadThreadFeedItems],
   );
+}
+
+/**
+ * Folds unread replies into the cached titles list as they arrive, so a done
+ * thread they reopen stays open once they are read, rather than waiting for
+ * the next poll to carry the newer activity.
+ */
+export function useLiveTitledThreadActivity(): void {
+  const queryClient = useQueryClient();
+  const query = useThreadTitlesQuery();
+  const { unreadThreadFeedItems } = useAppShell();
+  const activity = React.useMemo(() => {
+    const latest = new Map<string, number>();
+    for (const item of unreadThreadFeedItems) {
+      const rootId = getThreadReference(item.tags).rootId?.toLowerCase();
+      if (!rootId) continue;
+      latest.set(rootId, Math.max(latest.get(rootId) ?? 0, item.createdAt));
+    }
+    return latest;
+  }, [unreadThreadFeedItems]);
+  React.useEffect(() => {
+    const next = applyThreadActivity(query.data, activity);
+    if (next !== query.data) {
+      queryClient.setQueryData(THREAD_TITLES_QUERY_KEY, next);
+    }
+  }, [activity, query.data, queryClient]);
 }
 
 /** Agent work in threads the Threads view lists, for its sidebar entry. */

@@ -109,17 +109,29 @@ async function openThread(
   return rootId as string;
 }
 
-async function emitReply(page: Page, parentEventId: string, content: string) {
+async function emitReply(
+  page: Page,
+  parentEventId: string,
+  content: string,
+  createdAt?: number,
+) {
   await page.evaluate(
-    ({ channelName, content, parentEventId, pubkey }) => {
+    ({ channelName, content, createdAt, parentEventId, pubkey }) => {
       (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
         channelName,
         content,
+        createdAt,
         parentEventId,
         pubkey,
       });
     },
-    { channelName: CHANNEL_NAME, content, parentEventId, pubkey: ALICE_PUBKEY },
+    {
+      channelName: CHANNEL_NAME,
+      content,
+      createdAt,
+      parentEventId,
+      pubkey: ALICE_PUBKEY,
+    },
   );
 }
 
@@ -814,7 +826,7 @@ test.describe("thread titles", () => {
     await expect(rows).toHaveText([/Busy thread/, /Pin me/]);
   });
 
-  test("a done thread stays pinned until unpinned, then collapses into Done and resurfaces on new replies", async ({
+  test("a done thread stays pinned until unpinned, then collapses into Done and reopens on new activity", async ({
     page,
   }) => {
     await installMockBridge(page);
@@ -889,29 +901,54 @@ test.describe("thread titles", () => {
       /Finish me/,
     ]);
 
-    // A new reply brings it back above the fold, still marked done.
-    await emitReply(page, finishRoot, "One more thing on the finished thread.");
+    // Your own reply reopens it. Reply timestamps are whole seconds, so let
+    // the second the mark was made in pass first.
+    await doneSection
+      .getByTestId("threads-view-row")
+      .filter({ hasText: "Finish me" })
+      .click();
+    const panel = page.getByTestId("message-thread-panel");
+    await expect(panel).toContainText("Root of the thread to finish.");
+    await page.waitForTimeout(1_100);
+    await panel.getByTestId("message-input").click();
+    await page.keyboard.type("Actually, one follow-up from me.");
+    await page.keyboard.press("Enter");
+    await expect(panel).toContainText("Actually, one follow-up from me.");
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
+    await doneButton.click();
+    await expect(doneButton).toHaveAttribute("aria-pressed", "true");
+    await expect(doneSection.getByTestId("threads-view-row")).toHaveText([
+      /Finish me/,
+    ]);
+
+    // Someone else's reply reopens it too, back above the fold. Its clock
+    // runs a little ahead, which marking done again must still beat.
+    await emitReply(
+      page,
+      finishRoot,
+      "One more thing on the finished thread.",
+      Math.floor(Date.now() / 1000) + 5,
+    );
     await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
     const resurfaced = rows.filter({ hasText: "Finish me" });
-    await expect(resurfaced).toHaveAttribute("data-unread", "true");
-    await expect(resurfaced).toHaveAttribute("data-done", "true");
-    await expect(
-      finishItem.getByTestId("threads-view-row-done-badge"),
-    ).toBeVisible();
+    await expect(resurfaced).not.toHaveAttribute("data-done", "true");
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
 
-    // Reading it sends it back to Done.
-    await resurfaced.click();
-    await expect(page.getByTestId("message-thread-panel")).toContainText(
-      "One more thing on the finished thread.",
-    );
-    await expect(
-      doneSection.getByTestId("threads-view-row").filter({
-        hasText: "Finish me",
-      }),
-    ).not.toHaveAttribute("data-unread", "true");
+    // Reading it keeps it open until it is marked done again.
+    await expect(panel).toContainText("One more thing on the finished thread.");
+    await expect(resurfaced).not.toHaveAttribute("data-unread", "true");
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
+    await doneButton.click();
+    await expect(doneButton).toHaveAttribute("aria-pressed", "true");
+    await expect(doneSection.getByTestId("threads-view-row")).toHaveText([
+      /Finish me/,
+    ]);
+
     // Clicking Threads again closes the open thread.
     await page.getByTestId("open-threads-view").click();
-    await expect(page.getByTestId("message-thread-panel")).toHaveCount(0);
+    await expect(panel).toHaveCount(0);
 
     // Pinning it from Done lifts it back to Pinned, still marked done.
     await pinButton.click();

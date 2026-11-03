@@ -6,24 +6,26 @@ import {
   mergeThreadDoneStores,
   doneRoots,
   readThreadDoneStore,
+  setThreadDone,
   threadDoneStoresEqual,
-  toggleDone,
   writeThreadDoneStore,
   type ThreadDoneStore,
 } from "./threadDone";
 import { ThreadDoneSyncManager, type RemoteThreadDone } from "./threadDoneSync";
 
 /**
- * The current identity's done thread roots, synced across devices, plus a
- * toggle. Toggling is unavailable (undefined) until the relay and identity
- * resolve.
+ * The current identity's done thread roots (root → marked-at ms), synced
+ * across devices, plus an explicit setter. Setting is unavailable (undefined)
+ * until the relay and identity resolve.
  */
 export function useThreadDone(
   relayUrl: string | null,
   pubkey: string | undefined,
 ): {
-  done: ReadonlySet<string>;
-  toggle: ((rootId: string) => void) | undefined;
+  done: ReadonlyMap<string, number>;
+  setDone:
+    | ((rootId: string, done: boolean, notBeforeMs?: number) => void)
+    | undefined;
 } {
   const [store, setStore] = React.useState<ThreadDoneStore>(
     EMPTY_THREAD_DONE_STORE,
@@ -126,12 +128,19 @@ export function useThreadDone(
     };
   }, [applyRemote, pubkey, relayUrl]);
 
-  const toggle = React.useMemo(() => {
+  const setDone = React.useMemo(() => {
     if (!relayUrl || !pubkey) return undefined;
-    return (rootId: string) => {
+    // `notBeforeMs` floors the mark at the thread's latest activity, so a
+    // reply stamped by a clock running ahead cannot reopen it straight away.
+    return (rootId: string, done: boolean, notBeforeMs = 0) => {
       // Computed from the ref, not inside a state updater, so the write and
       // publish run exactly once even under StrictMode's double-invoke.
-      const next = toggleDone(storeRef.current, rootId, Date.now());
+      const next = setThreadDone(
+        storeRef.current,
+        rootId,
+        done,
+        Math.max(Date.now(), notBeforeMs),
+      );
       storeRef.current = next;
       setStore(next);
       writeThreadDoneStore(relayUrl, pubkey, next);
@@ -140,5 +149,5 @@ export function useThreadDone(
   }, [pubkey, relayUrl]);
 
   const done = React.useMemo(() => doneRoots(store), [store]);
-  return { done, toggle };
+  return { done, setDone };
 }

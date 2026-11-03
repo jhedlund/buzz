@@ -69,21 +69,26 @@ function capEntries(roots: Record<string, ThreadDoneEntry>) {
   return Object.fromEntries(entries.slice(0, MAX_THREAD_DONE_ENTRIES));
 }
 
-export function toggleDone(
+/**
+ * Sets the state explicitly rather than flipping it: a thread reopened by new
+ * activity is still stored as done, and marking it done again must restamp it.
+ */
+export function setThreadDone(
   store: ThreadDoneStore,
   rootId: string,
+  done: boolean,
   nowMs: number,
 ): ThreadDoneStore {
   const root = rootId.toLowerCase();
   const current = store.roots[root];
   // Strictly after the previous write, so a clock that stepped backwards
-  // still produces a toggle that wins the merge.
+  // still produces a write that wins the merge.
   const updatedAt = Math.max(nowMs, (current?.updatedAt ?? 0) + 1);
   return {
     version: 1,
     roots: capEntries({
       ...store.roots,
-      [root]: { done: !current?.done, updatedAt },
+      [root]: { done, updatedAt },
     }),
   };
 }
@@ -124,31 +129,49 @@ export function threadDoneStoresEqual(
   });
 }
 
-export function doneRoots(store: ThreadDoneStore): ReadonlySet<string> {
-  return new Set(
+/** Done thread roots → when each was marked done (ms). */
+export function doneRoots(store: ThreadDoneStore): ReadonlyMap<string, number> {
+  return new Map(
     Object.entries(store.roots)
       .filter(([, entry]) => entry.done)
-      .map(([root]) => root),
+      .map(([root, entry]) => [root, entry.updatedAt]),
   );
 }
 
 /**
- * Splits off done threads, keeping the incoming activity order. A done thread
- * with unread replies stays active so new activity on it can't be missed;
- * that is a view rule, so no device writes to the store when a reply lands.
+ * A thread is done only while nothing has happened since it was marked:
+ * any later activity, including the user's own reply, reopens it until it is
+ * marked done again. That is a view rule, so no device writes to the store
+ * when a reply lands. Unread replies also reopen it, because the activity
+ * timestamp only refreshes when the list is refetched.
  */
-export function partitionByDone<T extends { rootId: string }>(
+export function isThreadDone(
+  entry: { rootId: string; lastActivityAt: number },
+  done: ReadonlyMap<string, number>,
+  unreadCounts: ReadonlyMap<string, number>,
+): boolean {
+  const markedAtMs = done.get(entry.rootId.toLowerCase());
+  return (
+    markedAtMs !== undefined &&
+    entry.lastActivityAt * 1000 <= markedAtMs &&
+    (unreadCounts.get(entry.rootId) ?? 0) === 0
+  );
+}
+
+/** Splits off done threads, keeping the incoming activity order. */
+export function partitionByDone<
+  T extends { rootId: string; lastActivityAt: number },
+>(
   entries: readonly T[],
-  done: ReadonlySet<string>,
+  done: ReadonlyMap<string, number>,
   unreadCounts: ReadonlyMap<string, number>,
 ): { active: T[]; done: T[] } {
   const active: T[] = [];
   const doneEntries: T[] = [];
   for (const entry of entries) {
-    const isDone =
-      done.has(entry.rootId.toLowerCase()) &&
-      (unreadCounts.get(entry.rootId) ?? 0) === 0;
-    (isDone ? doneEntries : active).push(entry);
+    (isThreadDone(entry, done, unreadCounts) ? doneEntries : active).push(
+      entry,
+    );
   }
   return { active, done: doneEntries };
 }

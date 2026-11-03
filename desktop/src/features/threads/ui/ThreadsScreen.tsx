@@ -27,6 +27,7 @@ import {
 import { resolveChannelDisplayLabel } from "@/features/sidebar/lib/channelLabels";
 import { formatWorkingTooltip } from "@/features/sidebar/ui/SidebarSection";
 import {
+  useLiveTitledThreadActivity,
   useMarkOpenThreadRead,
   useThreadTitlesQuery,
   useTitledThreadUnreadCounts,
@@ -36,7 +37,10 @@ import {
   filterByChannel,
   threadChannelOptions,
 } from "@/features/threads/lib/threadChannelFilter";
-import { partitionByDone } from "@/features/threads/lib/threadDone";
+import {
+  isThreadDone,
+  partitionByDone,
+} from "@/features/threads/lib/threadDone";
 import { unreadReplyIdsForRoot } from "@/features/threads/lib/threadPaneUnread";
 import { partitionByPin } from "@/features/threads/lib/threadPins";
 import { useThreadDone } from "@/features/threads/lib/useThreadDone";
@@ -139,7 +143,7 @@ function ThreadRow({
   done,
   entry,
   onOpen,
-  onToggleDone,
+  onSetDone,
   onTogglePin,
   pinned,
   selected,
@@ -151,7 +155,9 @@ function ThreadRow({
   done: boolean;
   entry: ThreadTitle;
   onOpen: (entry: ThreadTitle, channel: Channel | undefined) => void;
-  onToggleDone: ((rootId: string) => void) | undefined;
+  onSetDone:
+    | ((rootId: string, done: boolean, notBeforeMs?: number) => void)
+    | undefined;
   onTogglePin: ((rootId: string) => void) | undefined;
   pinned: boolean;
   selected: boolean;
@@ -190,15 +196,6 @@ function ThreadRow({
           >
             {entry.title}
           </span>
-          {done && hasUnread ? (
-            <span
-              className="inline-flex shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-2xs font-medium leading-none text-muted-foreground"
-              data-testid="threads-view-row-done-badge"
-              title="Marked done; it has new replies"
-            >
-              Done
-            </span>
-          ) : null}
           {working ? <ThreadWorkingBadge summary={working} /> : null}
           {hasUnread ? (
             <span
@@ -223,7 +220,7 @@ function ThreadRow({
           </span>
         </span>
       </button>
-      {onToggleDone ? (
+      {onSetDone ? (
         <button
           aria-label={done ? "Mark thread not done" : "Mark thread done"}
           aria-pressed={done}
@@ -235,7 +232,9 @@ function ThreadRow({
               : "opacity-0 group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100",
           )}
           data-testid="threads-view-row-done"
-          onClick={() => onToggleDone(entry.rootId)}
+          onClick={() =>
+            onSetDone(entry.rootId, !done, entry.lastActivityAt * 1000)
+          }
           title={done ? "Mark thread not done" : "Mark thread done"}
           type="button"
         >
@@ -280,13 +279,14 @@ function ThreadsBody({
   titlesQuery: ReturnType<typeof useThreadTitlesQuery>;
 }) {
   const unreadCounts = useTitledThreadUnreadCounts();
+  useLiveTitledThreadActivity();
   const workingThreads = useActiveAgentTurnsByThread();
   const relayOrigin = useRelayOrigin();
   const { pinned: pinnedRoots, toggle: handleTogglePin } = useThreadPins(
     relayOrigin,
     currentPubkey,
   );
-  const { done: doneRoots, toggle: handleToggleDone } = useThreadDone(
+  const { done: doneRoots, setDone: handleSetDone } = useThreadDone(
     relayOrigin,
     currentPubkey,
   );
@@ -343,7 +343,7 @@ function ThreadsBody({
 
   // Pin wins over done for placement: a pinned thread stays in Pinned (shown
   // as done) until it is unpinned, and only unpinned done threads collapse
-  // into Done.
+  // into Done. New activity reopens a done thread wherever it sits.
   const { pinned, unpinned: unpinnedAll } = partitionByPin(
     filterByChannel(titlesQuery.data, channelFilter),
     pinnedRoots,
@@ -359,10 +359,10 @@ function ThreadsBody({
         <ThreadRow
           channel={channelsById.get(entry.channelId)}
           currentPubkey={currentPubkey}
-          done={doneRoots.has(entry.rootId.toLowerCase())}
+          done={isThreadDone(entry, doneRoots, unreadCounts)}
           entry={entry}
           onOpen={onOpen}
-          onToggleDone={handleToggleDone}
+          onSetDone={handleSetDone}
           onTogglePin={handleTogglePin}
           pinned={pinnedRoots.has(entry.rootId.toLowerCase())}
           selected={entry.rootId === selectedRootId}
