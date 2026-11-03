@@ -11,7 +11,12 @@ import {
   partitionByDone,
   setThreadDone,
 } from "./threadDone.ts";
-import { MAX_FRONTIER_IDS } from "./observedThreadActivity.ts";
+import {
+  advanceFrontier,
+  MAX_FRONTIER_IDS,
+  mergeObservedActivity,
+  normalizeFrontierIds,
+} from "./observedThreadActivity.ts";
 import { partitionByPin } from "./threadPins.ts";
 
 const A = "a".repeat(64);
@@ -268,6 +273,42 @@ test("a thread with a saturated second can be marked done and stays done", () =>
   });
   assert.equal(store.roots[A].activityIds.length, MAX_FRONTIER_IDS);
   assert.deepEqual(parseThreadDonePayload(store), store);
+});
+
+test("marking after an out-of-order busy second stays done when the poll returns the Rust selection", () => {
+  // 60 replies in one second: f00..f49 arrive first, then smaller a00..a09.
+  const late = Array.from(
+    { length: 50 },
+    (_, i) => `f${String(i).padStart(2, "0")}`,
+  );
+  const early = Array.from(
+    { length: 10 },
+    (_, i) => `a${String(i).padStart(2, "0")}`,
+  );
+  let live;
+  for (const id of [...late, ...early]) live = advanceFrontier(live, 1_000, id);
+  const staleRow = {
+    ...row(A, 900, ["older"]),
+    channelId: "c",
+    title: "t",
+  };
+  const [displayed] = mergeObservedActivity([staleRow], new Map([[A, live]]));
+  const marks = doneRoots(
+    setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 1, {
+      at: displayed.lastActivityAt,
+      ids: displayed.lastActivityIds,
+    }),
+  );
+  assert.equal(isThreadDone(displayed, marks, NO_UNREAD), true);
+
+  // The next poll: Rust keeps the smallest 50 of the same 60 events.
+  const polled = {
+    ...staleRow,
+    lastActivityAt: 1_000,
+    lastActivityIds: normalizeFrontierIds([...late, ...early]),
+  };
+  const [refreshed] = mergeObservedActivity([polled], new Map([[A, live]]));
+  assert.equal(isThreadDone(refreshed, marks, NO_UNREAD), true);
 });
 
 test("a done thread with unread replies stays active, even at the frontier", () => {

@@ -19,19 +19,29 @@ export const MAX_OBSERVED_ROOTS = 500;
 
 /**
  * Ids one frontier keeps for its second, on every side: the Rust list, this
- * store and a done mark. Past it the frontier saturates and stops growing, so
- * a mark always covers the row it was made from and memory stays bounded; the
- * cost is that more than this many events in one second read as one.
+ * store and a done mark. Every side keeps the smallest ids, sorted, so the
+ * same events select the same set whatever order they arrived in, and a mark
+ * matches the next poll. Memory stays bounded; the cost is that past this many
+ * events in one second, one whose id sorts above the kept set goes unseen.
  * Mirrors `MAX_ACTIVITY_IDS` in `commands/thread_titles.rs`.
  */
 export const MAX_FRONTIER_IDS = 50;
+
+/** The bounded selection every side applies: unique, sorted, smallest kept. */
+export function normalizeFrontierIds(ids: readonly string[]): string[] {
+  return [...new Set(ids)].sort().slice(0, MAX_FRONTIER_IDS);
+}
+
+function sameIds(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((id, i) => id === right[i]);
+}
 
 let observed: ReadonlyMap<string, ActivityFrontier> = new Map();
 const listeners = new Set<() => void>();
 
 /**
  * Folds one event into a frontier; returns the same object when nothing
- * changes: an older second, a known id, or a saturated second.
+ * changes: an older second, a known id, or an id that sorts above a full set.
  */
 export function advanceFrontier(
   frontier: ActivityFrontier | undefined,
@@ -39,14 +49,9 @@ export function advanceFrontier(
   id: string,
 ): ActivityFrontier {
   if (!frontier || at > frontier.at) return { at, ids: [id] };
-  if (
-    at < frontier.at ||
-    frontier.ids.length >= MAX_FRONTIER_IDS ||
-    frontier.ids.includes(id)
-  ) {
-    return frontier;
-  }
-  return { at, ids: [...frontier.ids, id] };
+  if (at < frontier.at || frontier.ids.includes(id)) return frontier;
+  const ids = normalizeFrontierIds([...frontier.ids, id]);
+  return sameIds(ids, frontier.ids) ? frontier : { at, ids };
 }
 
 export function recordThreadActivity(
@@ -109,19 +114,15 @@ export function mergeObservedActivity(
   const next = titles.map((entry) => {
     const seen = activity.get(entry.rootId.toLowerCase());
     if (!seen || seen.at < entry.lastActivityAt) return entry;
-    let frontier: ActivityFrontier = {
+    const start: ActivityFrontier = {
       at: entry.lastActivityAt,
-      ids: entry.lastActivityIds ?? [],
+      ids: normalizeFrontierIds(entry.lastActivityIds ?? []),
     };
+    let frontier = start;
     for (const id of seen.ids) {
       frontier = advanceFrontier(frontier, seen.at, id);
     }
-    if (
-      frontier.at === entry.lastActivityAt &&
-      frontier.ids.length === (entry.lastActivityIds ?? []).length
-    ) {
-      return entry;
-    }
+    if (frontier === start) return entry;
     changed = true;
     return {
       ...entry,

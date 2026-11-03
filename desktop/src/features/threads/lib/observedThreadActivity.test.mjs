@@ -7,6 +7,7 @@ import {
   MAX_FRONTIER_IDS,
   MAX_OBSERVED_ROOTS,
   mergeObservedActivity,
+  normalizeFrontierIds,
   recordThreadActivity,
   resetObservedThreadActivity,
   subscribeObservedThreadActivity,
@@ -116,8 +117,9 @@ test("a busy second saturates at the bound instead of growing", () => {
   const unsubscribe = subscribeObservedThreadActivity(() => {
     calls += 1;
   });
+  // Ascending ids: past the bound each arrival sorts above the kept set.
   for (let i = 0; i < MAX_FRONTIER_IDS * 4; i++) {
-    recordThreadActivity(ROOT, 1_000, `same-second-${i}`);
+    recordThreadActivity(ROOT, 1_000, `id-${String(i).padStart(4, "0")}`);
   }
   assert.equal(
     getObservedThreadActivity().get(ROOT)?.ids.length,
@@ -141,4 +143,41 @@ test("merging into a saturated row keeps it within the bound", () => {
     mergeObservedActivity(titles, new Map([[ROOT, { at: 1_000, ids: ["x"] }]])),
     titles,
   );
+});
+
+test("a busy second keeps the smallest ids whatever order they arrive in", () => {
+  const late = Array.from(
+    { length: 50 },
+    (_, i) => `f${String(i).padStart(2, "0")}`,
+  );
+  const early = Array.from(
+    { length: 10 },
+    (_, i) => `a${String(i).padStart(2, "0")}`,
+  );
+  let forward;
+  for (const id of [...late, ...early])
+    forward = advanceFrontier(forward, 1_000, id);
+  let backward;
+  for (const id of [...early, ...late].reverse()) {
+    backward = advanceFrontier(backward, 1_000, id);
+  }
+  const expected = normalizeFrontierIds([...early, ...late]);
+  assert.equal(expected.length, MAX_FRONTIER_IDS);
+  assert.deepEqual(forward.ids, expected);
+  assert.deepEqual(backward.ids, expected);
+});
+
+test("a same-length frontier whose ids change still counts as new activity", () => {
+  const relay = Array.from(
+    { length: MAX_FRONTIER_IDS },
+    (_, i) => `f${String(i).padStart(2, "0")}`,
+  );
+  const titles = [entry({ lastActivityAt: 1_000, lastActivityIds: relay })];
+  const merged = mergeObservedActivity(
+    titles,
+    new Map([[ROOT, { at: 1_000, ids: ["a00"] }]]),
+  );
+  assert.notEqual(merged, titles);
+  assert.equal(merged[0].lastActivityIds[0], "a00");
+  assert.equal(merged[0].lastActivityIds.length, MAX_FRONTIER_IDS);
 });

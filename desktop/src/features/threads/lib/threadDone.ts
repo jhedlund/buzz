@@ -1,4 +1,7 @@
-import { MAX_FRONTIER_IDS } from "./observedThreadActivity";
+import {
+  MAX_FRONTIER_IDS,
+  normalizeFrontierIds,
+} from "./observedThreadActivity";
 
 /**
  * Marking a thread done is a personal triage flag, like a pin: it never
@@ -116,7 +119,7 @@ export function setThreadDone(
               done,
               updatedAt,
               activityAt: activity.at,
-              activityIds: activity.ids.slice(0, MAX_FRONTIER_IDS),
+              activityIds: normalizeFrontierIds(activity.ids),
             }
           : { done, updatedAt },
     }),
@@ -192,7 +195,7 @@ export function doneRoots(
  * running behind the previous replier's) in a thread nothing notifies you
  * about stays done until the next reply, since only relay ingest order could
  * tell it from a replayed old event. And past `MAX_FRONTIER_IDS` events in one
- * second, further events in that second are not told apart.
+ * second, a further event whose id sorts above the kept set goes unseen.
  */
 export function isThreadDone(
   entry: {
