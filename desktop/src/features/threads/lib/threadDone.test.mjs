@@ -11,6 +11,7 @@ import {
   partitionByDone,
   setThreadDone,
 } from "./threadDone.ts";
+import { MAX_FRONTIER_IDS } from "./observedThreadActivity.ts";
 import { partitionByPin } from "./threadPins.ts";
 
 const A = "a".repeat(64);
@@ -253,6 +254,20 @@ test("marking a reopened thread done again files it away", () => {
     isThreadDone(entry, markA(FRONTIER + 50, ["new"]), NO_UNREAD),
     true,
   );
+});
+
+test("a thread with a saturated second can be marked done and stays done", () => {
+  const ids = Array.from({ length: MAX_FRONTIER_IDS }, (_, i) => `r${i}`);
+  const entry = row(A, 1_000, ids);
+  assert.equal(isThreadDone(entry, markA(1_000, ids), NO_UNREAD), true);
+  // A store that somehow holds more keeps only the bound, and parsing it
+  // back still accepts the mark.
+  const store = setThreadDone(EMPTY_THREAD_DONE_STORE, A, true, 1, {
+    at: 1_000,
+    ids: [...ids, "extra"],
+  });
+  assert.equal(store.roots[A].activityIds.length, MAX_FRONTIER_IDS);
+  assert.deepEqual(parseThreadDonePayload(store), store);
 });
 
 test("a done thread with unread replies stays active, even at the frontier", () => {

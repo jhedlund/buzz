@@ -44,6 +44,7 @@ import { resetAgentObserverStore } from "@/features/agents/observerRelayStore";
 import { resetAvatarPresentations } from "@/features/profile/avatarPresentationStore";
 import { resetAvatarProfileSync } from "@/features/profile/avatarProfileSync";
 import { resetSidebarRelayConnectionCardState } from "@/features/sidebar/ui/useSidebarRelayConnectionCard";
+import { resetObservedThreadActivity } from "@/features/threads/lib/observedThreadActivity";
 import { clearMarkdownNodeCache } from "@/shared/ui/markdown/nodeCache";
 import { resetMessageLinkMetadataCache } from "@/shared/ui/markdown/useMessageLinkMetadata";
 import { resetVideoPlayerState } from "@/shared/ui/videoPlayerState";
@@ -91,6 +92,7 @@ async function resetCommunityState({
   resetLinkPreviewPreparations();
   resetPersistentAgentAudienceStore();
   resetChannelMembershipWrites();
+  resetObservedThreadActivity();
   // Intentionally NOT reset: the in-flight detached agent-start map
   // (`useDetachedAgentStart`). Its entries are keyed by the scope each start
   // asserts (relay URL + signer + agent pubkey), so they cannot leak into the

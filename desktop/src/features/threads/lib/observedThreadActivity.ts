@@ -17,17 +17,35 @@ export type ActivityFrontier = {
 /** Roots remembered; the oldest activity is forgotten first. */
 export const MAX_OBSERVED_ROOTS = 500;
 
+/**
+ * Ids one frontier keeps for its second, on every side: the Rust list, this
+ * store and a done mark. Past it the frontier saturates and stops growing, so
+ * a mark always covers the row it was made from and memory stays bounded; the
+ * cost is that more than this many events in one second read as one.
+ * Mirrors `MAX_ACTIVITY_IDS` in `commands/thread_titles.rs`.
+ */
+export const MAX_FRONTIER_IDS = 50;
+
 let observed: ReadonlyMap<string, ActivityFrontier> = new Map();
 const listeners = new Set<() => void>();
 
-/** Folds one event into a frontier; returns the same object if it is known. */
+/**
+ * Folds one event into a frontier; returns the same object when nothing
+ * changes: an older second, a known id, or a saturated second.
+ */
 export function advanceFrontier(
   frontier: ActivityFrontier | undefined,
   at: number,
   id: string,
 ): ActivityFrontier {
   if (!frontier || at > frontier.at) return { at, ids: [id] };
-  if (at < frontier.at || frontier.ids.includes(id)) return frontier;
+  if (
+    at < frontier.at ||
+    frontier.ids.length >= MAX_FRONTIER_IDS ||
+    frontier.ids.includes(id)
+  ) {
+    return frontier;
+  }
   return { at, ids: [...frontier.ids, id] };
 }
 

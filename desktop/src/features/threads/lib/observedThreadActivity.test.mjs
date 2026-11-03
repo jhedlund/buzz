@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   advanceFrontier,
   getObservedThreadActivity,
+  MAX_FRONTIER_IDS,
   MAX_OBSERVED_ROOTS,
   mergeObservedActivity,
   recordThreadActivity,
@@ -107,4 +108,37 @@ test("mergeObservedActivity folds newer and same-second activity, re-sorting, an
   );
   assert.deepEqual(newer[0].lastActivityIds, ["n"]);
   assert.equal(titles[1].lastActivityAt, 100, "the input is not mutated");
+});
+
+test("a busy second saturates at the bound instead of growing", () => {
+  resetObservedThreadActivity();
+  let calls = 0;
+  const unsubscribe = subscribeObservedThreadActivity(() => {
+    calls += 1;
+  });
+  for (let i = 0; i < MAX_FRONTIER_IDS * 4; i++) {
+    recordThreadActivity(ROOT, 1_000, `same-second-${i}`);
+  }
+  assert.equal(
+    getObservedThreadActivity().get(ROOT)?.ids.length,
+    MAX_FRONTIER_IDS,
+  );
+  assert.equal(calls, MAX_FRONTIER_IDS, "saturated arrivals change nothing");
+  // A later second still advances it.
+  recordThreadActivity(ROOT, 1_001, "next-second");
+  assert.deepEqual(getObservedThreadActivity().get(ROOT), {
+    at: 1_001,
+    ids: ["next-second"],
+  });
+  unsubscribe();
+  resetObservedThreadActivity();
+});
+
+test("merging into a saturated row keeps it within the bound", () => {
+  const ids = Array.from({ length: MAX_FRONTIER_IDS }, (_, i) => `r${i}`);
+  const titles = [entry({ lastActivityAt: 1_000, lastActivityIds: ids })];
+  assert.equal(
+    mergeObservedActivity(titles, new Map([[ROOT, { at: 1_000, ids: ["x"] }]])),
+    titles,
+  );
 });

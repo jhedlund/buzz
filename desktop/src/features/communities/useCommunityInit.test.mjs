@@ -176,3 +176,26 @@ for (const failingUpdate of [0, 1]) {
     assert.equal(pendingTrust.length, failingUpdate + 1);
   });
 }
+
+test("switching communities forgets thread activity observed in the old one", async () => {
+  const { getObservedThreadActivity, recordThreadActivity } = await import(
+    "@/features/threads/lib/observedThreadActivity"
+  );
+  const original = relayClient.disconnect;
+  relayClient.disconnect = () => {};
+  try {
+    const { result, rerender } = renderHook(
+      (community) =>
+        useCommunityInit(community, community.id, false, false, [a, b]),
+      { initialProps: a },
+    );
+    await waitFor(() => assert.equal(result.current.isReady, true));
+    recordThreadActivity("f".repeat(64), 200, "event-in-a");
+    assert.equal(getObservedThreadActivity().size, 1);
+
+    rerender(b);
+    await waitFor(() => assert.equal(getObservedThreadActivity().size, 0));
+  } finally {
+    relayClient.disconnect = original;
+  }
+});

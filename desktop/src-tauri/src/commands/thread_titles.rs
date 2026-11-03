@@ -29,6 +29,10 @@ const ACTIVITY_ROOT_BATCH: usize = 100;
 const ACTIVITY_REPLY_WINDOW: u32 = 500;
 /// Stream and forum reply kinds (edits and diffs are not new activity).
 const REPLY_KINDS: [u16; 3] = [9, 40002, 45003];
+/// Ids one activity frontier keeps for its second. Past it the frontier
+/// saturates, so clients (which apply the same bound, `MAX_FRONTIER_IDS` in
+/// `observedThreadActivity.ts`) always see a set they can store whole.
+const MAX_ACTIVITY_IDS: usize = 50;
 const CONFLICT_MESSAGE: &str =
     "conflict: someone else changed this thread's title while you were editing";
 
@@ -58,6 +62,11 @@ impl ActivityFrontier {
         }
         if at == self.at {
             self.ids.insert(id.to_owned());
+            // Keep the smallest ids, so every poll of a saturated second
+            // returns the same set whatever order the relay sent it in.
+            if self.ids.len() > MAX_ACTIVITY_IDS {
+                self.ids.pop_last();
+            }
         }
     }
 }
@@ -314,6 +323,24 @@ mod tests {
         assert_eq!(sorted[0].last_activity_ids, expected);
         // A title with no newer reply is its own frontier.
         assert_eq!(sorted[1].last_activity_ids, ["r"]);
+    }
+
+    #[test]
+    fn a_busy_second_keeps_the_same_bounded_ids_in_any_order() {
+        let ids: Vec<String> = (0..MAX_ACTIVITY_IDS + 10)
+            .map(|i| format!("{i:04}"))
+            .collect();
+        let mut forward = ActivityFrontier::default();
+        let mut backward = ActivityFrontier::default();
+        for id in &ids {
+            forward.observe(1000, id);
+        }
+        for id in ids.iter().rev() {
+            backward.observe(1000, id);
+        }
+        assert_eq!(forward.ids.len(), MAX_ACTIVITY_IDS);
+        assert_eq!(forward.ids, backward.ids);
+        assert_eq!(forward.ids.last().unwrap(), &ids[MAX_ACTIVITY_IDS - 1]);
     }
 
     #[test]

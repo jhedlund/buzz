@@ -1,3 +1,5 @@
+import { MAX_FRONTIER_IDS } from "./observedThreadActivity";
+
 /**
  * Marking a thread done is a personal triage flag, like a pin: it never
  * touches the shared title artifact. The store mirrors `threadPins.ts` under
@@ -21,9 +23,6 @@ export type ThreadDoneEntry = {
   activityAt?: number;
   activityIds?: readonly string[];
 };
-
-/** Bounds the ids a mark keeps for one activity second. */
-const MAX_ACTIVITY_IDS = 50;
 
 export type ThreadDoneStore = {
   version: 1;
@@ -66,7 +65,7 @@ export function parseThreadDonePayload(value: unknown): ThreadDoneStore | null {
             (mark.activityAt === undefined || isTimestamp(mark.activityAt)) &&
             (mark.activityIds === undefined ||
               (Array.isArray(mark.activityIds) &&
-                mark.activityIds.length <= MAX_ACTIVITY_IDS &&
+                mark.activityIds.length <= MAX_FRONTIER_IDS &&
                 mark.activityIds.every((id) => typeof id === "string")))
           );
         },
@@ -117,7 +116,7 @@ export function setThreadDone(
               done,
               updatedAt,
               activityAt: activity.at,
-              activityIds: activity.ids.slice(0, MAX_ACTIVITY_IDS),
+              activityIds: activity.ids.slice(0, MAX_FRONTIER_IDS),
             }
           : { done, updatedAt },
     }),
@@ -188,6 +187,12 @@ export function doneRoots(
  * not include. Both sides are author-stamped, so the marking device's clock
  * plays no part. Unread replies also reopen it, covering a reply stamped
  * before the frontier until it is read.
+ *
+ * Accepted limits: a reply stamped before the frontier (its author's clock
+ * running behind the previous replier's) in a thread nothing notifies you
+ * about stays done until the next reply, since only relay ingest order could
+ * tell it from a replayed old event. And past `MAX_FRONTIER_IDS` events in one
+ * second, further events in that second are not told apart.
  */
 export function isThreadDone(
   entry: {

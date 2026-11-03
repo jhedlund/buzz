@@ -15037,7 +15037,8 @@ export function maybeInstallE2eTauriMocks() {
             return {
               ...entry,
               last_activity_at: at,
-              last_activity_ids: [...ids].sort(),
+              // The command keeps the 50 smallest ids of a busy second.
+              last_activity_ids: [...ids].sort().slice(0, 50),
             };
           })
           .sort((a, b) => b.last_activity_at - a.last_activity_at);
