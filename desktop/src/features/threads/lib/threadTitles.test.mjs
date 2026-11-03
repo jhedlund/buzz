@@ -1,11 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { QueryClient } from "@tanstack/react-query";
-
 import {
   applyRootTitleWrite,
-  applyThreadActivity,
   applyTitleWrite,
   batchTitleSyncChannels,
   countUnreadByTitledRoot,
@@ -13,7 +10,6 @@ import {
   findThreadTitle,
   interpretTitleDraft,
   MAX_LIVE_SYNC_CHANNELS_PER_FILTER,
-  noteOwnThreadReply,
   summarizeWorkingTitledThreads,
   THREAD_TITLES_QUERY_KEY,
   threadTitleRootQueryKey,
@@ -266,51 +262,4 @@ test("batchTitleSyncChannels dedupes, sorts, and splits at the relay #h cap", ()
   );
   assert.equal(batches[0][0], "c000");
   assert.equal(batches[1][1], "c129");
-});
-
-test("applyThreadActivity bumps newer activity and re-sorts, keeping the array when nothing is newer", () => {
-  const titles = [
-    entry({ rootId: OTHER_ROOT, lastActivityAt: 200, title: "Busy" }),
-    entry({ lastActivityAt: 100 }),
-  ];
-  assert.equal(applyThreadActivity(titles, new Map()), titles);
-  assert.equal(
-    applyThreadActivity(titles, new Map([[ROOT, 100]])),
-    titles,
-    "activity that is not newer changes nothing",
-  );
-  const bumped = applyThreadActivity(titles, new Map([[ROOT, 300]]));
-  assert.deepEqual(
-    bumped.map((title) => [title.rootId, title.lastActivityAt]),
-    [
-      [ROOT, 300],
-      [OTHER_ROOT, 200],
-    ],
-  );
-  assert.equal(
-    titles[1].lastActivityAt,
-    100,
-    "the cached array is not mutated",
-  );
-  assert.equal(applyThreadActivity(undefined, new Map([[ROOT, 1]])), undefined);
-});
-
-test("noteOwnThreadReply bumps a titled root and invalidates the list, ignoring untitled ones", () => {
-  const queryClient = new QueryClient();
-  const titles = [entry({ lastActivityAt: 100 })];
-  queryClient.setQueryData(THREAD_TITLES_QUERY_KEY, titles);
-
-  noteOwnThreadReply(queryClient, OTHER_ROOT, 500);
-  noteOwnThreadReply(queryClient, null, 500);
-  assert.equal(queryClient.getQueryData(THREAD_TITLES_QUERY_KEY), titles);
-
-  noteOwnThreadReply(queryClient, ROOT.toUpperCase(), 500);
-  assert.equal(
-    queryClient.getQueryData(THREAD_TITLES_QUERY_KEY)[0].lastActivityAt,
-    500,
-  );
-  assert.equal(
-    queryClient.getQueryState(THREAD_TITLES_QUERY_KEY)?.isInvalidated,
-    true,
-  );
 });

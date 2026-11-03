@@ -38,6 +38,28 @@ pub struct ThreadTitleEntry {
     title: ThreadTitle,
     /// Unix seconds of the newest of: last reply, title revision.
     last_activity_at: u64,
+    /// Ids of the replies and title revision stamped `last_activity_at`, so
+    /// a client can tell new activity within that second from what it saw.
+    last_activity_ids: Vec<String>,
+}
+
+/// The newest activity second and the ids of every event in it.
+#[derive(Debug, Default, Clone)]
+struct ActivityFrontier {
+    at: u64,
+    ids: BTreeSet<String>,
+}
+
+impl ActivityFrontier {
+    fn observe(&mut self, at: u64, id: &str) {
+        if at > self.at {
+            self.at = at;
+            self.ids.clear();
+        }
+        if at == self.at {
+            self.ids.insert(id.to_owned());
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -55,17 +77,23 @@ fn validate_root(root_id: &str) -> Result<String, String> {
     Ok(root)
 }
 
-/// `root -> newest reply time` for the given roots, from replies whose `e`
+/// `root -> newest reply frontier` for the given roots, from replies whose `e`
 /// tags name them (NIP-10 replies tag their thread root).
-fn last_reply_times(replies: &[nostr::Event], roots: &HashSet<&str>) -> HashMap<String, u64> {
-    let mut latest: HashMap<String, u64> = HashMap::new();
+fn last_reply_frontiers(
+    replies: &[nostr::Event],
+    roots: &HashSet<&str>,
+) -> HashMap<String, ActivityFrontier> {
+    let mut latest: HashMap<String, ActivityFrontier> = HashMap::new();
     for reply in replies {
         let created_at = reply.created_at.as_secs();
+        let id = reply.id.to_hex();
         for tag in reply.tags.iter() {
             if let [name, value, ..] = tag.as_slice() {
                 if name == "e" && roots.contains(value.as_str()) {
-                    let entry = latest.entry(value.clone()).or_default();
-                    *entry = (*entry).max(created_at);
+                    latest
+                        .entry(value.clone())
+                        .or_default()
+                        .observe(created_at, &id);
                 }
             }
         }
@@ -76,14 +104,16 @@ fn last_reply_times(replies: &[nostr::Event], roots: &HashSet<&str>) -> HashMap<
 /// Newest activity first; ties keep the relay's newest-revision-first order.
 fn sort_by_activity(
     titles: Vec<ThreadTitle>,
-    last_replies: &HashMap<String, u64>,
+    last_replies: &HashMap<String, ActivityFrontier>,
 ) -> Vec<ThreadTitleEntry> {
     let mut entries: Vec<_> = titles
         .into_iter()
         .map(|title| {
-            let last_reply = last_replies.get(&title.root).copied().unwrap_or(0);
+            let mut frontier = last_replies.get(&title.root).cloned().unwrap_or_default();
+            frontier.observe(title.updated_at, &title.revision);
             ThreadTitleEntry {
-                last_activity_at: last_reply.max(title.updated_at),
+                last_activity_at: frontier.at,
+                last_activity_ids: frontier.ids.into_iter().collect(),
                 title,
             }
         })
@@ -125,7 +155,7 @@ pub async fn list_thread_titles(
             }
         }
     }
-    let last_replies = last_reply_times(&replies, &all_roots);
+    let last_replies = last_reply_frontiers(&replies, &all_roots);
     Ok(sort_by_activity(titles, &last_replies))
 }
 
@@ -255,11 +285,14 @@ mod tests {
     #[test]
     fn recent_replies_outrank_recent_titles() {
         let roots: HashSet<&str> = ["old-title-busy", "new-title-quiet", "no-replies"].into();
-        let replies = last_reply_times(
+        let late = reply(500, &[["e", "old-title-busy"], ["e", "some-parent"]]);
+        let same_second = reply(500, &[["e", "old-title-busy"], ["e", "old-title-busy"]]);
+        let replies = last_reply_frontiers(
             &[
                 reply(400, &[["e", "old-title-busy"]]),
                 // Nested reply: root plus a parent that isn't a titled root.
-                reply(500, &[["e", "old-title-busy"], ["e", "some-parent"]]),
+                late.clone(),
+                same_second.clone(),
                 reply(900, &[["e", "untitled-root"]]),
             ],
             &roots,
@@ -276,6 +309,22 @@ mod tests {
         let order: Vec<_> = sorted.iter().map(|e| e.title.root.as_str()).collect();
         assert_eq!(order, ["old-title-busy", "new-title-quiet", "no-replies"]);
         assert_eq!(sorted[0].last_activity_at, 500);
+        let mut expected = vec![late.id.to_hex(), same_second.id.to_hex()];
+        expected.sort();
+        assert_eq!(sorted[0].last_activity_ids, expected);
+        // A title with no newer reply is its own frontier.
+        assert_eq!(sorted[1].last_activity_ids, ["r"]);
+    }
+
+    #[test]
+    fn a_title_revision_in_the_reply_second_joins_the_frontier() {
+        let roots: HashSet<&str> = ["root"].into();
+        let r = reply(500, &[["e", "root"]]);
+        let replies = last_reply_frontiers(std::slice::from_ref(&r), &roots);
+        let sorted = sort_by_activity(vec![title("root", 500)], &replies);
+        let mut expected = vec![r.id.to_hex(), "r".to_string()];
+        expected.sort();
+        assert_eq!(sorted[0].last_activity_ids, expected);
     }
 
     #[test]

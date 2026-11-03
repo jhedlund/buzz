@@ -15015,18 +15015,31 @@ export function maybeInstallE2eTauriMocks() {
         // newest reply; ties keep newest-revision-first.
         return [...mockThreadTitles.values()]
           .reverse()
-          .map((entry) => ({
-            ...entry,
-            last_activity_at: getMockMessageStore(entry.channel).reduce(
-              (latest, event) =>
-                event.tags.some(
+          .map((entry) => {
+            // The frontier: newest second and the ids of every event in it.
+            let at = entry.last_activity_at;
+            let ids = [entry.revision];
+            for (const event of getMockMessageStore(entry.channel)) {
+              if (
+                !event.tags.some(
                   (tag) => tag[0] === "e" && tag[1] === entry.root,
                 )
-                  ? Math.max(latest, event.created_at)
-                  : latest,
-              entry.last_activity_at,
-            ),
-          }))
+              ) {
+                continue;
+              }
+              if (event.created_at > at) {
+                at = event.created_at;
+                ids = [event.id];
+              } else if (event.created_at === at && !ids.includes(event.id)) {
+                ids.push(event.id);
+              }
+            }
+            return {
+              ...entry,
+              last_activity_at: at,
+              last_activity_ids: [...ids].sort(),
+            };
+          })
           .sort((a, b) => b.last_activity_at - a.last_activity_at);
       }
       case "get_thread_titles": {

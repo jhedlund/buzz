@@ -13,7 +13,6 @@ import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { SidebarProjectsSection } from "@/features/sidebar/ui/SidebarProjectsSection";
 import { useChannelsQuery } from "@/features/channels/hooks";
 import {
-  useLiveTitledThreadActivity,
   useThreadTitleLiveSync,
   useTitledThreadUnreadCounts,
   useWorkingTitledThreads,
@@ -160,7 +159,6 @@ function ThreadsMenuItem({
     [channelsQuery.data],
   );
   useThreadTitleLiveSync(joinedChannelIds);
-  useLiveTitledThreadActivity();
   const hasUnread = useTitledThreadUnreadCounts().size > 0;
   const working = useWorkingTitledThreads();
   return (

@@ -7,12 +7,14 @@ import { mergeTimelineCacheMessages } from "@/features/messages/hooks";
 import { channelMessagesKey } from "@/features/messages/lib/messageQueryKeys";
 import {
   getChannelIdFromTags,
+  getThreadReference,
   isThreadReply,
 } from "@/features/messages/lib/threading";
 import {
   hasMentionForEvent,
   shouldNotifyForEvent,
 } from "@/features/notifications/lib/shouldNotify";
+import { recordThreadActivity } from "@/features/threads/lib/observedThreadActivity";
 import { relayClient } from "@/shared/api/relayClient";
 import {
   CHANNEL_EVENT_KINDS,
@@ -277,6 +279,15 @@ export function useLiveChannelUpdates(
     // messages that the notification policy deliberately filters below.
     if (isUnreadTriggerKind) {
       updateChannelLastMessageAt(queryClient, channelId, event.created_at);
+      // Same for thread activity: any reply reopens a done thread, whether
+      // or not it notifies.
+      if (isThreadReply(event.tags)) {
+        recordThreadActivity(
+          getThreadReference(event.tags).rootId,
+          event.created_at,
+          event.id,
+        );
+      }
     }
 
     // Let the caller observe self-authored trigger events (e.g. to track

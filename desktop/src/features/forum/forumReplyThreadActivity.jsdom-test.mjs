@@ -31,23 +31,13 @@ const { QueryClient, QueryClientProvider } = await import(
   "@tanstack/react-query"
 );
 const { useCreateForumReplyMutation } = await import("./hooks.ts");
-const { THREAD_TITLES_QUERY_KEY } = await import(
-  "../threads/lib/threadTitles.ts"
+const { getObservedThreadActivity, resetObservedThreadActivity } = await import(
+  "../threads/lib/observedThreadActivity.ts"
 );
 
-test("your own forum comment carries its activity into the titled thread", async () => {
+test("your own forum comment is recorded as activity on its thread", async () => {
   const queryClient = new QueryClient();
-  queryClient.setQueryData(THREAD_TITLES_QUERY_KEY, [
-    {
-      author: "p".repeat(64),
-      channelId: CHANNEL,
-      lastActivityAt: 100,
-      revision: "r".repeat(64),
-      rootId: POST,
-      title: "Forum thread",
-      updatedAt: 100,
-    },
-  ]);
+  resetObservedThreadActivity();
   const latest = {};
   function Harness() {
     latest.mutation = useCreateForumReplyMutation({
@@ -74,9 +64,9 @@ test("your own forum comment carries its activity into the titled thread", async
     });
   });
 
-  assert.equal(
-    queryClient.getQueryData(THREAD_TITLES_QUERY_KEY)[0].lastActivityAt,
-    500,
-  );
+  assert.deepEqual(getObservedThreadActivity().get(POST), {
+    at: 500,
+    ids: [COMMENT],
+  });
   await act(async () => root.unmount());
 });

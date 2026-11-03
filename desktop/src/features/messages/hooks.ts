@@ -39,7 +39,7 @@ export { mergeMessages, mergeTimelineCacheMessages };
 import { splitOutgoingTags } from "@/features/messages/lib/imetaMediaMarkdown";
 import { messageMentionPubkeys } from "@/features/messages/lib/messageMentionPubkeys";
 import { buildSentFromThreadTag } from "@/features/messages/lib/sentFromThread";
-import { noteOwnThreadReply } from "@/features/threads/lib/threadTitles";
+import { recordThreadActivity } from "@/features/threads/lib/observedThreadActivity";
 import {
   clearTimeoutState,
   recordTimeoutFromRejection,
@@ -743,10 +743,10 @@ export function useSendMessageMutation(
       // An accepted send proves the write-block is lifted; clear any recorded
       // timeout so the chip and disable state fall away immediately.
       clearTimeoutState();
-      noteOwnThreadReply(
-        queryClient,
+      recordThreadActivity(
         getThreadReference(message.tags).rootId,
         message.created_at,
+        message.id,
       );
       if (!context) {
         return;

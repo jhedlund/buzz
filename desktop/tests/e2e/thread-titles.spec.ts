@@ -990,6 +990,78 @@ test.describe("thread titles", () => {
     await expect(rows).toHaveText([/Finish me/, /Busy thread/]);
   });
 
+  test("a done thread you have no part in reopens on any reply, even one in the same second", async ({
+    page,
+  }) => {
+    await installMockBridge(page);
+    await page.goto("/");
+    await page.getByTestId(`channel-${CHANNEL_NAME}`).click();
+    await expect(page.getByTestId("chat-title")).toHaveText(CHANNEL_NAME);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          (name) =>
+            (
+              window as MockMessageWindow
+            ).__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+              channelName: name,
+            }) ?? false,
+          CHANNEL_NAME,
+        ),
+      )
+      .toBe(true);
+
+    // Someone else's thread, named by someone else: no authorship,
+    // participation, follow or mention, so none of its replies notify.
+    const replyAt = Math.floor(Date.now() / 1000) + 100;
+    const rootId = await page.evaluate(
+      ({ channelName, pubkey }) =>
+        (window as MockMessageWindow).__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
+          channelName,
+          content: "Alice's own thread.",
+          pubkey,
+        })?.id ?? null,
+      { channelName: CHANNEL_NAME, pubkey: ALICE_PUBKEY },
+    );
+    expect(rootId).not.toBeNull();
+    await emitReply(page, rootId as string, "Alice's first reply.", replyAt);
+    await setRemoteTitles(page, [
+      {
+        channelName: CHANNEL_NAME,
+        rootId: rootId as string,
+        title: "Not my thread",
+      },
+    ]);
+
+    await page.getByTestId("open-threads-view").click();
+    const row = page
+      .getByTestId("threads-view-row")
+      .filter({ hasText: "Not my thread" });
+    await expect(row).toBeVisible();
+    await expect(row).not.toHaveAttribute("data-unread", "true");
+    const item = page
+      .getByRole("listitem")
+      .filter({ hasText: "Not my thread" });
+    const doneButton = item.getByTestId("threads-view-row-done");
+    await doneButton.click();
+    const doneToggle = page.getByTestId("threads-view-done-toggle");
+    await expect(doneToggle).toHaveText("Done(1)");
+
+    // A reply stamped in the very second the mark recorded reopens it, with
+    // nothing unread to hold it open.
+    await emitReply(page, rootId as string, "Same second, new reply.", replyAt);
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    await expect(row).not.toHaveAttribute("data-unread", "true");
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
+
+    // Marked again, a later reply reopens it the same way.
+    await doneButton.click();
+    await expect(doneToggle).toHaveText("Done(1)");
+    await emitReply(page, rootId as string, "Later reply.", replyAt + 1);
+    await expect(page.getByTestId("threads-view-done")).toHaveCount(0);
+    await expect(doneButton).toHaveAttribute("aria-pressed", "false");
+  });
+
   test("a title another user sets appears before anyone replies", async ({
     page,
   }) => {

@@ -25,7 +25,11 @@ export function useThreadDone(
 ): {
   done: ReadonlyMap<string, ThreadDoneEntry>;
   setDone:
-    | ((rootId: string, done: boolean, activityAt: number) => void)
+    | ((
+        rootId: string,
+        done: boolean,
+        activity: { at: number; ids: readonly string[] },
+      ) => void)
     | undefined;
 } {
   const [store, setStore] = React.useState<ThreadDoneStore>(
@@ -131,7 +135,11 @@ export function useThreadDone(
 
   const setDone = React.useMemo(() => {
     if (!relayUrl || !pubkey) return undefined;
-    return (rootId: string, done: boolean, activityAt: number) => {
+    return (
+      rootId: string,
+      done: boolean,
+      activity: { at: number; ids: readonly string[] },
+    ) => {
       // Computed from the ref, not inside a state updater, so the write and
       // publish run exactly once even under StrictMode's double-invoke.
       const next = setThreadDone(
@@ -139,7 +147,7 @@ export function useThreadDone(
         rootId,
         done,
         Date.now(),
-        activityAt,
+        activity,
       );
       storeRef.current = next;
       setStore(next);

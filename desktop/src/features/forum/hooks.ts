@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getForumPosts, getForumThread } from "@/shared/api/forum";
 import { useFocusedRefetchInterval } from "@/shared/lib/useDocumentVisible";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
-import { noteOwnThreadReply } from "@/features/threads/lib/threadTitles";
+import { recordThreadActivity } from "@/features/threads/lib/observedThreadActivity";
 import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
 import type {
   Channel,
@@ -195,10 +195,10 @@ export function useCreateForumReplyMutation(channel: Channel | null) {
       );
     },
     onSuccess: (data, variables) => {
-      noteOwnThreadReply(
-        queryClient,
+      recordThreadActivity(
         data.rootEventId ?? variables.parentEventId,
         data.createdAt,
+        data.eventId,
       );
       if (channel) {
         void queryClient.invalidateQueries({

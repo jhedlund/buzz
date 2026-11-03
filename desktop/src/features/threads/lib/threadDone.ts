@@ -13,12 +13,17 @@ export type ThreadDoneEntry = {
   done: boolean;
   updatedAt: number;
   /**
-   * The thread's latest activity (seconds) when it was marked done. Activity
-   * past it reopens the thread. Marks written before this field fall back to
-   * comparing activity with `updatedAt`.
+   * The thread's latest activity (seconds) when it was marked done, and the
+   * ids of the events in that second. A later second, or an unseen id in the
+   * same second, reopens the thread. Marks written before these fields fall
+   * back to comparing activity with `updatedAt`.
    */
   activityAt?: number;
+  activityIds?: readonly string[];
 };
+
+/** Bounds the ids a mark keeps for one activity second. */
+const MAX_ACTIVITY_IDS = 50;
 
 export type ThreadDoneStore = {
   version: 1;
@@ -58,7 +63,11 @@ export function parseThreadDonePayload(value: unknown): ThreadDoneStore | null {
             mark !== null &&
             typeof mark.done === "boolean" &&
             isTimestamp(mark.updatedAt) &&
-            (mark.activityAt === undefined || isTimestamp(mark.activityAt))
+            (mark.activityAt === undefined || isTimestamp(mark.activityAt)) &&
+            (mark.activityIds === undefined ||
+              (Array.isArray(mark.activityIds) &&
+                mark.activityIds.length <= MAX_ACTIVITY_IDS &&
+                mark.activityIds.every((id) => typeof id === "string")))
           );
         },
       ),
@@ -84,14 +93,14 @@ function capEntries(roots: Record<string, ThreadDoneEntry>) {
 /**
  * Sets the state explicitly rather than flipping it: a thread reopened by new
  * activity is still stored as done, and marking it done again must restamp it.
- * `activityAt` is the thread's latest activity as the user saw it when marking.
+ * `activity` is the thread's latest activity as the user saw it when marking.
  */
 export function setThreadDone(
   store: ThreadDoneStore,
   rootId: string,
   done: boolean,
   nowMs: number,
-  activityAt?: number,
+  activity?: { at: number; ids: readonly string[] },
 ): ThreadDoneStore {
   const root = rootId.toLowerCase();
   const current = store.roots[root];
@@ -103,8 +112,13 @@ export function setThreadDone(
     roots: capEntries({
       ...store.roots,
       [root]:
-        done && activityAt !== undefined
-          ? { done, updatedAt, activityAt }
+        done && activity
+          ? {
+              done,
+              updatedAt,
+              activityAt: activity.at,
+              activityIds: activity.ids.slice(0, MAX_ACTIVITY_IDS),
+            }
           : { done, updatedAt },
     }),
   };
@@ -130,6 +144,14 @@ export function mergeThreadDoneStores(
   return { version: 1, roots: capEntries(roots) };
 }
 
+function sameIds(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  return left.length === right.length && left.every((id, i) => id === right[i]);
+}
+
 export function threadDoneStoresEqual(
   left: ThreadDoneStore,
   right: ThreadDoneStore,
@@ -142,7 +164,8 @@ export function threadDoneStoresEqual(
       rightEntry !== undefined &&
       rightEntry.done === left.roots[root].done &&
       rightEntry.updatedAt === left.roots[root].updatedAt &&
-      rightEntry.activityAt === left.roots[root].activityAt
+      rightEntry.activityAt === left.roots[root].activityAt &&
+      sameIds(rightEntry.activityIds, left.roots[root].activityIds)
     );
   });
 }
@@ -160,14 +183,18 @@ export function doneRoots(
  * marked done again. That is a view rule, so no device writes to the store
  * when a reply lands.
  *
- * "Later" compares the thread's activity with the activity it had when it was
- * marked, both stamped by authors, so the marking device's clock plays no
- * part and a reply in the same second as the mark still counts. Unread
- * replies also reopen it, covering a reply stamped no later than the one
- * before it until it is read.
+ * "Later" compares the thread's activity frontier with the one it had when
+ * it was marked: a newer second, or an event in the same second the mark did
+ * not include. Both sides are author-stamped, so the marking device's clock
+ * plays no part. Unread replies also reopen it, covering a reply stamped
+ * before the frontier until it is read.
  */
 export function isThreadDone(
-  entry: { rootId: string; lastActivityAt: number },
+  entry: {
+    rootId: string;
+    lastActivityAt: number;
+    lastActivityIds?: readonly string[];
+  },
   done: ReadonlyMap<string, ThreadDoneEntry>,
   unreadCounts: ReadonlyMap<string, number>,
 ): boolean {
@@ -175,14 +202,22 @@ export function isThreadDone(
   if (!mark) return false;
   const quiet =
     mark.activityAt !== undefined
-      ? entry.lastActivityAt <= mark.activityAt
+      ? entry.lastActivityAt < mark.activityAt ||
+        (entry.lastActivityAt === mark.activityAt &&
+          (entry.lastActivityIds ?? []).every((id) =>
+            (mark.activityIds ?? []).includes(id),
+          ))
       : entry.lastActivityAt * 1000 <= mark.updatedAt;
   return quiet && (unreadCounts.get(entry.rootId) ?? 0) === 0;
 }
 
 /** Splits off done threads, keeping the incoming activity order. */
 export function partitionByDone<
-  T extends { rootId: string; lastActivityAt: number },
+  T extends {
+    rootId: string;
+    lastActivityAt: number;
+    lastActivityIds?: readonly string[];
+  },
 >(
   entries: readonly T[],
   done: ReadonlyMap<string, ThreadDoneEntry>,

@@ -10,6 +10,11 @@ export type ThreadTitle = {
   updatedAt: number;
   /** Newest of the last reply and the title revision, in unix seconds. */
   lastActivityAt: number;
+  /**
+   * Ids of the events stamped `lastActivityAt`, so activity within that
+   * second can be told apart. Absent where it isn't known.
+   */
+  lastActivityIds?: readonly string[];
 };
 
 type RawThreadTitle = {
@@ -20,6 +25,7 @@ type RawThreadTitle = {
   author: string;
   updated_at: number;
   last_activity_at: number;
+  last_activity_ids?: string[];
 };
 
 /** Every live thread title the user can read, most recently active first. */
@@ -33,13 +39,20 @@ export async function listThreadTitles(): Promise<ThreadTitle[]> {
     author: entry.author,
     updatedAt: entry.updated_at,
     lastActivityAt: entry.last_activity_at,
+    lastActivityIds: entry.last_activity_ids ?? [],
   }));
 }
 
 /** A thread's live title, looked up by its root (no activity ordering). */
-export type ThreadTitleRecord = Omit<ThreadTitle, "lastActivityAt">;
+export type ThreadTitleRecord = Omit<
+  ThreadTitle,
+  "lastActivityAt" | "lastActivityIds"
+>;
 
-type RawThreadTitleRecord = Omit<RawThreadTitle, "last_activity_at">;
+type RawThreadTitleRecord = Omit<
+  RawThreadTitle,
+  "last_activity_at" | "last_activity_ids"
+>;
 
 /** Live titles for specific thread roots; untitled roots are omitted. */
 export async function getThreadTitles(

@@ -155,7 +155,11 @@ function ThreadRow({
   entry: ThreadTitle;
   onOpen: (entry: ThreadTitle, channel: Channel | undefined) => void;
   onSetDone:
-    | ((rootId: string, done: boolean, activityAt: number) => void)
+    | ((
+        rootId: string,
+        done: boolean,
+        activity: { at: number; ids: readonly string[] },
+      ) => void)
     | undefined;
   onTogglePin: ((rootId: string) => void) | undefined;
   pinned: boolean;
@@ -231,7 +235,12 @@ function ThreadRow({
               : "opacity-0 group-hover/thread-row:opacity-100 group-has-[:focus-visible]/thread-row:opacity-100",
           )}
           data-testid="threads-view-row-done"
-          onClick={() => onSetDone(entry.rootId, !done, entry.lastActivityAt)}
+          onClick={() =>
+            onSetDone(entry.rootId, !done, {
+              at: entry.lastActivityAt,
+              ids: entry.lastActivityIds ?? [],
+            })
+          }
           title={done ? "Mark thread not done" : "Mark thread done"}
           type="button"
         >

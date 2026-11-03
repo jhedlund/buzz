@@ -1,5 +1,3 @@
-import type { QueryClient } from "@tanstack/react-query";
-
 import type {
   ThreadTitle,
   ThreadTitleRecord,
@@ -162,55 +160,6 @@ export function applyTitleWrite(
     },
     ...rest,
   ];
-}
-
-/**
- * Folds replies seen live (root → newest `created_at`, seconds) into the
- * cached list, so a reply reopens a done thread and moves it up before the
- * next poll. Returns the same array when nothing is newer, so a caller that
- * writes it back on every change cannot loop.
- */
-export function applyThreadActivity(
-  titles: readonly ThreadTitle[] | undefined,
-  activity: ReadonlyMap<string, number>,
-): readonly ThreadTitle[] | undefined {
-  if (!titles || activity.size === 0) return titles;
-  let changed = false;
-  const next = titles.map((entry) => {
-    const seenAt = activity.get(entry.rootId.toLowerCase());
-    if (seenAt === undefined || seenAt <= entry.lastActivityAt) return entry;
-    changed = true;
-    return { ...entry, lastActivityAt: seenAt };
-  });
-  if (!changed) return titles;
-  // Stable, so ties keep the relay's order.
-  return next.sort((left, right) => right.lastActivityAt - left.lastActivityAt);
-}
-
-/**
- * Your own reply is activity too: it reopens a done thread. Carries it into
- * the cached list straight away, then refetches so the list stays the
- * relay's. Only titled roots are touched, so ordinary replies cost nothing.
- */
-export function noteOwnThreadReply(
-  queryClient: QueryClient,
-  rootId: string | null | undefined,
-  createdAt: number,
-): void {
-  if (!rootId) return;
-  const titles = queryClient.getQueryData<ThreadTitle[]>(
-    THREAD_TITLES_QUERY_KEY,
-  );
-  const next = applyThreadActivity(
-    titles,
-    new Map([[rootId.toLowerCase(), createdAt]]),
-  );
-  if (next === titles) return;
-  queryClient.setQueryData(THREAD_TITLES_QUERY_KEY, next);
-  void queryClient.invalidateQueries({
-    exact: true,
-    queryKey: THREAD_TITLES_QUERY_KEY,
-  });
 }
 
 /** Optimistically apply a write to one root's cached title. */
